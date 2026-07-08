@@ -36,7 +36,7 @@
   },
   "devDependencies": {
     "@stylistic/eslint-plugin": "^5.10.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.1.1",
     "@typescript-eslint/eslint-plugin": "^8.59.0",
     "@typescript-eslint/parser": "^8.59.0",
     "@vercel/ncc": "^0.38.3",
