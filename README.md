@@ -1,43 +1,26 @@
-<p align="center">
-  <img src="docs/res/github-graph.png">
-</p>
-
 This is not an officially supported Google product. This project is not
 eligible for the [Google Open Source Software Vulnerability Rewards
 Program](https://bughunters.google.com/open-source-security).
 
-# GitHub Actions Runner
+# Google ML Infrastructure Actions Runner
 
-[![Actions Status](https://github.com/actions/runner/workflows/Runner%20CI/badge.svg)](https://github.com/actions/runner/actions)
+This repository is a **hard fork** of [github.com/actions/runner](https://github.com/actions/runner). It is customized and maintained by the Google ML Infrastructure team to support the ML Actions Platform.
 
-The runner is the application that runs a job from a GitHub Actions workflow. It is used by GitHub Actions in the [hosted virtual environments](https://github.com/actions/virtual-environments), or you can [self-host the runner](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/about-self-hosted-runners) in your own environment.
+## Why a Hard Fork?
 
-## Get Started
+Standard GitHub Actions self-hosted runners rely on local filesystems or shared network volumes to share directories (like the workspace) between the runner process and job containers. In a Kubernetes environment (like GKE) at scale, sharing volumes introduces storage latency, and executing commands via `kubectl exec` is prone to network fragility.
 
-For more information about installing and using self-hosted runners, see [Adding self-hosted runners](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/adding-self-hosted-runners) and [Using self-hosted runners in a workflow](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/using-self-hosted-runners-in-a-workflow)
+To address these challenges, this fork implements a **serverless execution model** specifically optimized for GKE:
+- **No Shared Volumes**: The runner dynamically schedules job pods without requiring shared network storage (e.g. NFS/Filestore or Persistent Disks).
+- **Direct Agent Orchestration**: A lightweight agent is injected into job containers to handle execution and file management over the GKE pod-to-pod network.
+- **Native Kubernetes Management**: The runner orchestrates pod lifecycles directly using the Kubernetes API instead of relying on legacy external hooks.
 
-Runner releases:
+## Roadmap & Repository Strategy
 
-![win](docs/res/win_sm.png) [Pre-reqs](docs/start/envwin.md) | [Download](https://github.com/actions/runner/releases)  
+This repository will act as the single source of truth for the custom runner binary used across the ML Actions Platform. 
 
-![macOS](docs/res/apple_sm.png)  [Pre-reqs](docs/start/envosx.md) | [Download](https://github.com/actions/runner/releases)  
-
-![linux](docs/res/linux_sm.png)  [Pre-reqs](docs/start/envlinux.md) | [Download](https://github.com/actions/runner/releases)
-
-### Note
-
-Thank you for your interest in this GitHub repo, however, right now we are not taking contributions. 
-
-We continue to focus our resources on strategic areas that help our customers be successful while making developers' lives easier. While GitHub Actions remains a key part of this vision, we are allocating resources towards other areas of Actions and are not taking contributions to this repository at this time. The GitHub public roadmap is the best place to follow along for any updates on features we’re working on and what stage they’re in.
-
-We are taking the following steps to better direct requests related to GitHub Actions, including:
-
-1. We will be directing questions and support requests to our [Community Discussions area](https://github.com/orgs/community/discussions/categories/actions)
-
-2. High Priority bugs can be reported through Community Discussions or you can report these to our support team https://support.github.com/contact/bug-report.
-
-3. Security Issues should be handled as per our [SECURITY.md](https://github.com/actions/runner?tab=security-ov-file)
-
-We will still provide security updates for this project and fix major breaking changes during this time.
-
-You are welcome to still raise bugs in this repo.
+Our plan for this repository includes:
+1. **Upstream Merges**: Periodically sync with upstream releases of `actions/runner` to pull in security patches, runner updates, and new features, while preserving our GKE-native enhancements.
+2. **Kubernetes Native Orchestration**: Continued hardening of the C#-native `KubernetesManager` to directly control job pod setup, security constraints, and automatic resource cleanup.
+3. **Execution Agent Optimizations**: Further enhancements to execution reliability, gRPC streaming protocols, and bidirectional file syncing inside job containers.
+4. **mTLS & Security Controls**: Restricting control-plane communications via mutual TLS and scoped authentication tokens to ensure secure tenant isolation in shared GKE namespaces.
