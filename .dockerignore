@@ -1,0 +1,7 @@
+_dotnetsdk/
+_downloads/
+_layout/
+_package/
+src/**/bin/
+src/**/obj/
+src/Test/TestResults/
