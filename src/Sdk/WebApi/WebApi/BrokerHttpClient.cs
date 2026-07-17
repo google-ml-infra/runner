@@ -139,6 +139,8 @@ namespace GitHub.Actions.RunService.WebApi
                         };
                     case BrokerErrorKind.HostedRunnerDeprovisioned:
                         throw new HostedRunnerDeprovisionedException(brokerError.Message);
+                    case BrokerErrorKind.RunnerSessionInvalid:
+                        throw new TaskAgentSessionExpiredException(brokerError.Message);
                     default:
                         break;
                 }
@@ -265,10 +267,10 @@ namespace GitHub.Actions.RunService.WebApi
             {
                 switch (brokerError.ErrorKind)
                 {
+                    case BrokerErrorKind.AcknowledgeJobNotFound:
+                        throw new RunnerRequestJobNotFoundException(brokerError.Message);
                     case BrokerErrorKind.RunnerNotFound:
                         throw new RunnerNotFoundException(brokerError.Message);
-                    default:
-                        break;
                 }
             }
 

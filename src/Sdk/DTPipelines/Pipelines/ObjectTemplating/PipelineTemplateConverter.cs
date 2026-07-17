@@ -69,7 +69,18 @@ namespace GitHub.DistributedTask.Pipelines.ObjectTemplating
                         break;
                     case ActionSourceType.Repository:
                         var repositoryReference = step.Reference as RepositoryPathReference;
-                        name = !String.IsNullOrEmpty(repositoryReference.Name) ? repositoryReference.Name : PipelineConstants.SelfAlias;
+                        if (!String.IsNullOrEmpty(repositoryReference.Name))
+                        {
+                            name = repositoryReference.Name;
+                        }
+                        else if (String.Equals(repositoryReference.RepositoryType, PipelineConstants.SelfRepositoryAlias, StringComparison.OrdinalIgnoreCase))
+                        {
+                            name = PipelineConstants.SelfRepositoryAlias;
+                        }
+                        else
+                        {
+                            name = PipelineConstants.SelfAlias;
+                        }
                         break;
                 }
 
@@ -612,6 +623,14 @@ namespace GitHub.DistributedTask.Pipelines.ObjectTemplating
                     {
                         RepositoryType = PipelineConstants.SelfAlias,
                         Path = uses.Value
+                    };
+                }
+                else if (PipelineConstants.TryParseSelfRepository(uses.Value, out var selfPath))
+                {
+                    result.Reference = new RepositoryPathReference
+                    {
+                        RepositoryType = PipelineConstants.SelfRepositoryAlias,
+                        Path = selfPath
                     };
                 }
                 else
