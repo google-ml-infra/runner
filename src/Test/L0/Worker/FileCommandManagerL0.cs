@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -6,6 +6,7 @@ using GitHub.Runner.Common;
 using GitHub.Runner.Sdk;
 using GitHub.Runner.Worker;
 using GitHub.Runner.Worker.Container;
+using GitHub.Runner.Worker.Handlers;
 using Moq;
 using Xunit;
 
@@ -69,6 +70,9 @@ namespace GitHub.Runner.Common.Tests.Worker
             extensionManager.Setup(x => x.GetExtensions<IFileCommandExtension>())
                 .Returns(new List<IFileCommandExtension> { recordingExtension });
             hostContext.SetSingleton<IExtensionManager>(extensionManager.Object);
+
+            var workflowAgentManager = new Mock<IWorkflowAgentManager>();
+            hostContext.SetSingleton<IWorkflowAgentManager>(workflowAgentManager.Object);
 
             var ec = new Mock<IExecutionContext>();
             ec.Setup(x => x.SetGitHubContext(It.IsAny<string>(), It.IsAny<string>()));

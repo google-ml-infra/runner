@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
@@ -43,11 +43,16 @@ namespace GitHub.Runner.Worker
     {
         private IDockerCommandManager _dockerManager;
         private IContainerHookManager _containerHookManager;
+        private IKubernetesManager _kubernetesManager;
 
         public override void Initialize(IHostContext hostContext)
         {
             base.Initialize(hostContext);
-            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(Constants.Hooks.ContainerHooksPath)))
+            if (FeatureManager.IsNoSharedVolumeEnabled())
+            {
+                _kubernetesManager = HostContext.GetService<IKubernetesManager>();
+            }
+            else if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(Constants.Hooks.ContainerHooksPath)))
             {
                 _dockerManager = HostContext.GetService<IDockerCommandManager>();
             }
@@ -75,6 +80,13 @@ namespace GitHub.Runner.Worker
 
             executionContext.Debug($"Register post job cleanup for stopping/deleting containers.");
             executionContext.RegisterPostJobStep(postJobStep);
+            if (FeatureManager.IsNoSharedVolumeEnabled())
+            {
+                containers.ForEach(container => UpdateRegistryAuthForGitHubToken(executionContext, container));
+                containers.Where(container => container.IsJobContainer).ForEach(container => MountWellKnownDirectories(executionContext, container));
+                await _kubernetesManager.PrepareJobAsync(executionContext, containers);
+                return;
+            }
             if (FeatureManager.IsContainerHooksEnabled(executionContext.Global.Variables))
             {
                 // Initialize the containers
@@ -163,6 +175,11 @@ namespace GitHub.Runner.Worker
             List<ContainerInfo> containers = data as List<ContainerInfo>;
             ArgUtil.NotNull(containers, nameof(containers));
 
+            if (FeatureManager.IsNoSharedVolumeEnabled())
+            {
+                await _kubernetesManager.CleanupJobAsync(executionContext, containers);
+                return;
+            }
             if (FeatureManager.IsContainerHooksEnabled(executionContext.Global.Variables))
             {
                 await _containerHookManager.CleanupJobAsync(executionContext, containers);

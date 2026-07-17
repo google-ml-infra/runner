@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using GitHub.DistributedTask.ObjectTemplating;
@@ -172,7 +172,7 @@ namespace GitHub.Runner.Worker
             {
                 // Make sure the required container is already created
                 // Container hooks do not necessarily set 'ContainerId'
-                if (!FeatureManager.IsContainerHooksEnabled(ExecutionContext.Global.Variables))
+                if (!FeatureManager.IsContainerHooksEnabled(ExecutionContext.Global.Variables) && !FeatureManager.IsNoSharedVolumeEnabled())
                 {
                     ArgUtil.NotNullOrEmpty(ExecutionContext.Global.Container.ContainerId, nameof(ExecutionContext.Global.Container.ContainerId));
                 }
@@ -183,7 +183,8 @@ namespace GitHub.Runner.Worker
 
             // Setup File Command Manager
             var fileCommandManager = HostContext.CreateService<IFileCommandManager>();
-            fileCommandManager.InitializeFiles(ExecutionContext, null);
+            var targetContainer = FeatureManager.IsNoSharedVolumeEnabled() ? ExecutionContext.Global.Container : null;
+            fileCommandManager.InitializeFiles(ExecutionContext, targetContainer);
 
             // Load the inputs.
             ExecutionContext.Debug("Loading inputs");
@@ -285,6 +286,12 @@ namespace GitHub.Runner.Worker
 
             // Print out action details and log telemetry
             handler.PrepareExecution(Stage);
+
+            if (FeatureManager.IsNoSharedVolumeEnabled() && definition != null && !string.IsNullOrEmpty(definition.Directory) && System.IO.Directory.Exists(definition.Directory))
+            {
+                var workflowAgentManager = HostContext.GetService<IWorkflowAgentManager>();
+                await workflowAgentManager.SyncDirectoryToWorkflowPodAsync(ExecutionContext, definition.Directory);
+            }
 
             // Run the task.
             try

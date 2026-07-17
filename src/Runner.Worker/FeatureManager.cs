@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using System;
+using System;
 using GitHub.Runner.Common;
 
 namespace GitHub.Runner.Worker
@@ -24,6 +24,11 @@ namespace GitHub.Runner.Worker
             var isContainerHookFeatureFlagSet = variables?.GetBoolean(Constants.Runner.Features.AllowRunnerContainerHooks) ?? false;
             var isContainerHooksPathSet = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(Constants.Hooks.ContainerHooksPath));
             return isContainerHookFeatureFlagSet && isContainerHooksPathSet;
+        }
+
+        public static bool IsNoSharedVolumeEnabled()
+        {
+            return string.Equals(Environment.GetEnvironmentVariable(Constants.Variables.Actions.NoSharedVolume), "true", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
