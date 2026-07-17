@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -297,6 +297,9 @@ namespace GitHub.Runner.Worker.Handlers
                 // Script is written to local path (ie host) but executed relative to the StepHost, which may be a container
                 File.WriteAllText(scriptFilePath, contents, encoding);
             }
+
+            var workflowAgentManager = HostContext.GetService<IWorkflowAgentManager>();
+            await workflowAgentManager.SyncFileToWorkflowPodAsync(ExecutionContext, scriptFilePath);
 
             // Prepend PATH
             AddPrependPathToEnvironment();

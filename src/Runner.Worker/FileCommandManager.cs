@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using GitHub.DistributedTask.WebApi;
+using GitHub.DistributedTask.WebApi;
 using GitHub.Runner.Worker.Container;
 using GitHub.Runner.Common;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using GitHub.Runner.Worker.Handlers;
 
 namespace GitHub.Runner.Worker
 {
@@ -83,11 +84,17 @@ namespace GitHub.Runner.Worker
 
                 var pathToSet = container != null ? container.TranslateToContainerPath(newPath) : newPath;
                 context.SetGitHubContext(fileCommand.ContextName, pathToSet);
+
+                var workflowAgentManager = HostContext.GetService<IWorkflowAgentManager>();
+                workflowAgentManager.InitializeFileCommand(context, container, newPath, fileCommand.ContextName);
             }
         }
 
         public void ProcessFiles(IExecutionContext context, ContainerInfo container)
         {
+            var workflowAgentManager = HostContext.GetService<IWorkflowAgentManager>();
+            workflowAgentManager.SyncFileCommandsFromWorkflowPodAsync(context, container, _fileCommandDirectory, _fileSuffix, _commandExtensions).GetAwaiter().GetResult();
+
             foreach (var fileCommand in _commandExtensions)
             {
                 try

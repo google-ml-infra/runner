@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using GitHub.Runner.Listener;
+using GitHub.Runner.Listener;
 using GitHub.Runner.Listener.Check;
 using GitHub.Runner.Listener.Configuration;
 using GitHub.Runner.Worker;
@@ -86,6 +86,7 @@ namespace GitHub.Runner.Common.Tests
                 typeof(IDiagnosticLogManager),
                 typeof(IEnvironmentContextData),
                 typeof(IHookArgs),
+                typeof(IWorkflowAgentManager),
             };
             Validate(
                 assembly: typeof(IStepsRunner).GetTypeInfo().Assembly,
