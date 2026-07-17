@@ -38,7 +38,8 @@ WORKDIR /build/src
 # impractical in K8s. 'Release' builds preserve PDB symbol files, ensuring pod logs still output 
 # exact file line numbers and method stack traces on exceptions.
 ARG TARGETARCH
-RUN case "$TARGETARCH" in \
+RUN git config --global --add safe.directory /build \
+    && case "$TARGETARCH" in \
         arm64) RUNNER_ARCH="linux-arm64" ;; \
         *)     RUNNER_ARCH="linux-x64" ;; \
     esac \
