@@ -43,6 +43,9 @@ jobs:
           # Fetch full history/metadata so that git rev-parse HEAD works for the build telemetry
           fetch-depth: 0
 
+      - name: Trust Git workspace directory
+        run: git config --global --add safe.directory ${{ github.workspace }}
+
       - name: Set up Docker BuildX
         uses: docker/setup-buildx-action@v3.11.1
         with:
