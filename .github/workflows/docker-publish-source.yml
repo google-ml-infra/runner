@@ -20,9 +20,6 @@ on:
       tag:
         description: 'Release Tag to build from (e.g., v2.316.1)'
         required: true
-  pull_request:
-    branches:
-      - google-main
 
 jobs:
   publish-image:
@@ -30,8 +27,6 @@ jobs:
     container: google/cloud-sdk:524.0.0
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     env:
       REGISTRY: us-docker.pkg.dev
       IMAGE_NAME: ml-actions-platform-production/ml-actions-production-registry/actions-runner
@@ -39,7 +34,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.inputs.tag || '' }}
+          ref: ${{ github.event.inputs.tag }}
           # Fetch full history/metadata so that git rev-parse HEAD works for the build telemetry
           fetch-depth: 0
 
@@ -66,19 +61,11 @@ jobs:
             linux/amd64
             linux/arm64
           tags: |
-            ${{ github.event.inputs.tag && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.inputs.tag) || '' }}
-            ${{ github.event_name == 'pull_request' && format('{0}/{1}:pr-{2}', env.REGISTRY, env.IMAGE_NAME, github.event.pull_request.number) || format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) }}
-          push: ${{ github.event_name != 'pull_request' }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          push: true
           labels: |
             org.opencontainers.image.source=${{github.server_url}}/${{github.repository}}
             org.opencontainers.image.licenses=Apache-2.0
           annotations: |
-            org.opencontainers.image.description=GitHub Actions Runner built from source ${{ github.event.inputs.tag && format('at tag {0}', github.event.inputs.tag) || format('for PR #{0}', github.event.pull_request.number) }}
-
-      - name: Generate attestation
-        if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build-and-push.outputs.digest }}
-          push-to-registry: true
+            org.opencontainers.image.description=GitHub Actions Runner built from source at tag ${{ github.event.inputs.tag }}
