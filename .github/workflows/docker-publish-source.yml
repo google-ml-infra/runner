@@ -20,6 +20,14 @@ on:
       tag:
         description: 'Release Tag to build from (e.g., v2.316.1)'
         required: true
+      registry:
+        description: 'Docker Registry'
+        default: 'us-docker.pkg.dev'
+        required: true
+      image_name:
+        description: 'Docker Image Name'
+        default: 'ml-actions-platform-production/ml-actions-production-registry/actions-runner'
+        required: true
 
 jobs:
   publish-image:
@@ -28,8 +36,8 @@ jobs:
     permissions:
       contents: read
     env:
-      REGISTRY: us-docker.pkg.dev
-      IMAGE_NAME: ml-actions-platform-production/ml-actions-production-registry/actions-runner
+      REGISTRY: ${{ github.event.inputs.registry }}
+      IMAGE_NAME: ${{ github.event.inputs.image_name }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
