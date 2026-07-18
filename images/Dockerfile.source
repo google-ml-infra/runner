@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Stage 1: Build runner layout from local source or GitHub repository
-FROM mcr.microsoft.com/dotnet/sdk:8.0-noble AS runner-builder
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:8.0-noble AS runner-builder
 
 # Set RUNNER_BRANCH to build from remote repo branch/tag. Keep empty to build from local source context.
 ARG RUNNER_BRANCH=""
