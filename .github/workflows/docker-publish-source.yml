@@ -18,8 +18,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release Tag to build from (e.g., v2.316.1)'
-        required: true
+        description: 'Release Tag to build from (e.g., v2.316.1) (Optional)'
+        required: false
       registry:
         description: 'Docker Registry'
         default: 'us-docker.pkg.dev'
@@ -42,7 +42,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.inputs.tag }}
+          ref: ${{ github.event.inputs.tag || '' }}
           # Fetch full history/metadata so that git rev-parse HEAD works for the build telemetry
           fetch-depth: 0
 
@@ -69,11 +69,11 @@ jobs:
             linux/amd64
             linux/arm64
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.tag }}
+            ${{ github.event.inputs.tag && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.inputs.tag) || '' }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           push: true
           labels: |
             org.opencontainers.image.source=${{github.server_url}}/${{github.repository}}
             org.opencontainers.image.licenses=Apache-2.0
           annotations: |
-            org.opencontainers.image.description=GitHub Actions Runner built from source at tag ${{ github.event.inputs.tag }}
+            org.opencontainers.image.description=GitHub Actions Runner built from source ${{ github.event.inputs.tag && format('at tag {0}', github.event.inputs.tag) || format('at commit {0}', github.sha) }}
