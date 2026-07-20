@@ -1,0 +1,74 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Publish Docker Image from Source Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      registry:
+        description: 'Docker Registry'
+        default: 'us-docker.pkg.dev'
+        required: true
+      image_name:
+        description: 'Docker Image Name'
+        default: 'ml-actions-platform-production/ml-actions-production-registry/actions-runner'
+        required: true
+
+jobs:
+  publish-image:
+    runs-on: linux-x86-n2-16-buildkit
+    container: google/cloud-sdk:524.0.0
+    permissions:
+      contents: read
+    env:
+      REGISTRY: ${{ github.event.inputs.registry }}
+      IMAGE_NAME: ${{ github.event.inputs.image_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # Fetch full history/metadata so that git rev-parse HEAD works for the build telemetry
+          fetch-depth: 0
+
+      - name: Trust Git workspace directory
+        run: git config --global --add safe.directory ${{ github.workspace }}
+
+      - name: Set up Docker BuildX
+        uses: docker/setup-buildx-action@v3.11.1
+        with:
+          driver: remote
+          endpoint: tcp://localhost:1234
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v6
+        with:
+          # Use the root of the repo as the build context so it can copy the source files
+          context: .
+          file: ./images/Dockerfile.source
+          platforms: |
+            linux/amd64
+            linux/arm64
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          push: true
+          labels: |
+            org.opencontainers.image.source=${{github.server_url}}/${{github.repository}}
+          annotations: |
+            org.opencontainers.image.description=GitHub Actions Runner built from source at commit ${{ github.sha }}
