@@ -70,6 +70,5 @@ jobs:
           push: true
           labels: |
             org.opencontainers.image.source=${{github.server_url}}/${{github.repository}}
-            org.opencontainers.image.licenses=Apache-2.0
           annotations: |
             org.opencontainers.image.description=GitHub Actions Runner built from source at commit ${{ github.sha }}
