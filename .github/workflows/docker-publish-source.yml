@@ -23,7 +23,7 @@ on:
         required: true
       image_name:
         description: 'Docker Image Name'
-        default: 'ml-actions-platform-production/ml-actions-production-registry/actions-runner'
+        default: 'ml-oss-artifacts-published/ml-public-container/actions-runner'
         required: true
 
 jobs:
