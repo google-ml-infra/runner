@@ -53,9 +53,9 @@
     <DefineConstants>$(DefineConstants);DEBUG</DefineConstants>
   </PropertyGroup>
 
-  <!-- Set Treat tarnings as errors -->
   <PropertyGroup>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
   </PropertyGroup>
 
   <PropertyGroup>

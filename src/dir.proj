@@ -1,10 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="14.0" DefaultTargets="Build"
     xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <BUILD_OS Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Windows)))' == 'true'">Windows</BUILD_OS>
+        <DevNull Condition="'$(BUILD_OS)' == 'Windows'">NUL</DevNull>
+        <DevNull Condition="'$(DevNull)' == ''">/dev/null</DevNull>
+    </PropertyGroup>
+
     <Target Name="GenerateConstant">
-        <Exec Command="git rev-parse HEAD" ConsoleToMSBuild="true">
+        <Exec Command="git rev-parse HEAD 2&gt;$(DevNull)" ConsoleToMSBuild="true" ContinueOnError="WarnAndContinue">
             <Output TaskParameter="ConsoleOutput" PropertyName="GitInfoCommitHash" />
         </Exec>
+        <PropertyGroup>
+            <GitInfoCommitHash Condition="'$(GitInfoCommitHash)' == ''">unknown</GitInfoCommitHash>
+        </PropertyGroup>
         <Message Text="Building $(Product): $(GitInfoCommitHash) --- $(PackageRuntime)" Importance="high"/>
 
         <ItemGroup>
@@ -27,7 +36,7 @@
 
         <WriteLinesToFile File="Runner.Sdk/BuildConstants.cs" Lines="@(BuildConstants)" Overwrite="true" />
 
-        <Exec Command="git update-index --assume-unchanged ./Runner.Sdk/BuildConstants.cs" ConsoleToMSBuild="true" />
+        <Exec Command="git update-index --assume-unchanged ./Runner.Sdk/BuildConstants.cs" ConsoleToMSBuild="true" ContinueOnError="WarnAndContinue" />
     </Target>
 
     <ItemGroup>

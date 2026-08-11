@@ -421,5 +421,110 @@ namespace GitHub.Runner.Worker.Handlers
 
             context.Debug($"Finished syncing directory '{hostDirectory}'.");
         }
+
+        public async Task SyncDirectoryFromWorkflowPodAsync(IExecutionContext context, string hostDirectory)
+        {
+            if (!FeatureManager.IsNoSharedVolumeEnabled()) return;
+
+            var container = context.Global.Container;
+            var podIP = container?.ContainerIP;
+            if (string.IsNullOrEmpty(podIP) || string.IsNullOrEmpty(hostDirectory)) return;
+
+            var normalizedDirectory = Path.GetFullPath(hostDirectory);
+            var resolvedDirectory = container.TranslateToContainerPath(hostDirectory);
+            if (string.IsNullOrEmpty(resolvedDirectory)) return;
+
+            var containerPath = resolvedDirectory.Replace('\\', '/').TrimEnd('/');
+            var lastSlash = containerPath.LastIndexOf('/');
+            if (lastSlash < 0)
+            {
+                throw new InvalidOperationException($"Invalid container path resolved: {containerPath}");
+            }
+            var parentDir = containerPath.Substring(0, lastSlash);
+            var dirName = containerPath.Substring(lastSlash + 1);
+
+            var tempTarName = $"{Guid.NewGuid():N}.tar";
+            var remoteTarPath = $"/tmp/{tempTarName}";
+
+            context.Debug($"Archiving directory inside container: {containerPath} -> {remoteTarPath}");
+
+            var tarArgs = $"-cf {remoteTarPath} -C {parentDir} {dirName}";
+            var exitCode = await ExecuteAsync(
+                context,
+                container,
+                workingDirectory: "/",
+                fileName: "tar",
+                arguments: tarArgs,
+                environment: new Dictionary<string, string>(),
+                standardInInput: null,
+                prependPath: null,
+                onOutput: line => context.Debug($"tar stdout: {line}"),
+                onError: line => context.Warning($"tar stderr: {line}"),
+                cancellationToken: context.CancellationToken);
+
+            if (exitCode != 0)
+            {
+                throw new InvalidOperationException($"Failed to archive local action directory inside container. tar exit code: {exitCode}");
+            }
+
+            var tempDirectory = HostContext.GetDirectory(WellKnownDirectory.Temp);
+            var localTarPath = Path.Combine(tempDirectory, $"{Guid.NewGuid():N}.tar");
+
+            try
+            {
+                context.Debug($"Syncing directory tarball from workflow pod: {remoteTarPath} -> {localTarPath}");
+                using (var localFileStream = new FileStream(localTarPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    await ReadFileAsync(podIP, remoteTarPath, localFileStream);
+                }
+
+                var hostParentDir = Path.GetDirectoryName(normalizedDirectory);
+                if (!Directory.Exists(hostParentDir))
+                {
+                    Directory.CreateDirectory(hostParentDir);
+                }
+
+                context.Debug($"Extracting tarball on host to: {hostParentDir}");
+                System.Formats.Tar.TarFile.ExtractToDirectory(localTarPath, hostParentDir, overwriteFiles: true);
+            }
+            finally
+            {
+                // Clean up local temp tarball
+                try
+                {
+                    if (File.Exists(localTarPath))
+                    {
+                        File.Delete(localTarPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    context.Debug($"Failed to delete local temporary tarball '{localTarPath}': {ex.Message}");
+                }
+
+                // Clean up remote temp tarball in container
+                try
+                {
+                    context.Debug($"Cleaning up remote tarball inside container: {remoteTarPath}");
+                    await ExecuteAsync(
+                        context,
+                        container,
+                        workingDirectory: "/",
+                        fileName: "rm",
+                        arguments: $"-f {remoteTarPath}",
+                        environment: new Dictionary<string, string>(),
+                        standardInInput: null,
+                        prependPath: null,
+                        onOutput: null,
+                        onError: null,
+                        cancellationToken: context.CancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    context.Debug($"Failed to delete remote temporary tarball '{remoteTarPath}': {ex.Message}");
+                }
+            }
+            context.Debug($"Finished syncing directory '{hostDirectory}' from workflow pod.");
+        }
     }
 }

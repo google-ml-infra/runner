@@ -37,5 +37,7 @@ namespace GitHub.Runner.Worker.Handlers
         Task SyncFileToWorkflowPodAsync(IExecutionContext context, string hostPath);
 
         Task SyncDirectoryToWorkflowPodAsync(IExecutionContext context, string hostDirectory);
+
+        Task SyncDirectoryFromWorkflowPodAsync(IExecutionContext context, string hostDirectory);
     }
 }
