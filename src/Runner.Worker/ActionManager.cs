@@ -30,6 +30,7 @@ using GitHub.Runner.Common;
 using GitHub.Runner.Common.Util;
 using GitHub.Runner.Sdk;
 using GitHub.Runner.Worker.Container;
+using GitHub.Runner.Worker.Handlers;
 using GitHub.Services.Common;
 using Pipelines = GitHub.DistributedTask.Pipelines;
 using PipelineTemplateConstants = GitHub.DistributedTask.Pipelines.ObjectTemplating.PipelineTemplateConstants;
@@ -715,7 +716,13 @@ namespace GitHub.Runner.Worker
                     actionDirectory = executionContext.GetGitHubContext("workspace");
                     if (!string.IsNullOrEmpty(repoAction.Path))
                     {
-                        actionDirectory = Path.Combine(actionDirectory, repoAction.Path);
+                        actionDirectory = Path.Combine(actionDirectory, repoAction.Path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar));
+                    }
+
+                    if (FeatureManager.IsNoSharedVolumeEnabled() && executionContext.Global.Container != null)
+                    {
+                        var workflowAgentManager = HostContext.GetService<IWorkflowAgentManager>();
+                        workflowAgentManager.SyncDirectoryFromWorkflowPodAsync(executionContext, actionDirectory).GetAwaiter().GetResult();
                     }
                 }
                 else if (string.Equals(repoAction.RepositoryType, Pipelines.PipelineConstants.SelfRepositoryAlias, StringComparison.OrdinalIgnoreCase))
