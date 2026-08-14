@@ -36,7 +36,7 @@
 
         <WriteLinesToFile File="Runner.Sdk/BuildConstants.cs" Lines="@(BuildConstants)" Overwrite="true" />
 
-        <Exec Command="git update-index --assume-unchanged ./Runner.Sdk/BuildConstants.cs" ConsoleToMSBuild="true" ContinueOnError="WarnAndContinue" />
+        <Exec Command="git update-index --assume-unchanged ./Runner.Sdk/BuildConstants.cs 2&gt;$(DevNull)" ConsoleToMSBuild="true" ContinueOnError="WarnAndContinue" />
     </Target>
 
     <ItemGroup>
