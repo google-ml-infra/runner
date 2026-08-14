@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿namespace GitHub.Services.OAuth
+namespace GitHub.Services.OAuth
 {
     /// <summary>
     /// Lists the supported authorization grant types

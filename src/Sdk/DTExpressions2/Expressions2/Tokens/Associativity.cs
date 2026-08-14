@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿namespace GitHub.DistributedTask.Expressions2.Tokens
+namespace GitHub.DistributedTask.Expressions2.Tokens
 {
     internal enum Associativity
     {

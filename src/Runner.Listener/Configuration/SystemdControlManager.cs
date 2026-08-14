@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿#if OS_LINUX
+#if OS_LINUX
 using System;
 using System.Collections.Generic;
 using System.IO;

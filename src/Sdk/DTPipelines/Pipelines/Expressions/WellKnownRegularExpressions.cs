@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using System;
+using System;
 using System.Text.RegularExpressions;
 
 namespace GitHub.DistributedTask.Pipelines.Expressions

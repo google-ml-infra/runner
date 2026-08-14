@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using GitHub.Runner.Listener.Configuration;
+using GitHub.Runner.Listener.Configuration;
 using GitHub.Runner.Common.Util;
 using Moq;
 using System;

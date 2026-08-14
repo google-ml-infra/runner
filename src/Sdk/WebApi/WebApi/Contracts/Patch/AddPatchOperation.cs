@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using System.Collections;
+using System.Collections;
 using System.ComponentModel;
 using GitHub.Services.Common;
 using GitHub.Services.WebApi.Patch.Json;

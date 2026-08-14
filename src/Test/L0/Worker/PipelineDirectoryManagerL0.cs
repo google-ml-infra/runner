@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using Pipelines = GitHub.DistributedTask.Pipelines;
+using Pipelines = GitHub.DistributedTask.Pipelines;
 using GitHub.Runner.Worker;
 using Moq;
 using System.IO;

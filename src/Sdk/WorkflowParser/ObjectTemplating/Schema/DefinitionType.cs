@@ -14,7 +14,7 @@
 
 using System;
 
-﻿namespace GitHub.Actions.WorkflowParser.ObjectTemplating.Schema
+namespace GitHub.Actions.WorkflowParser.ObjectTemplating.Schema
 {
     internal enum DefinitionType
     {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿namespace GitHub.Services.WebApi.Patch
+namespace GitHub.Services.WebApi.Patch
 {
     // See RFC 6902 - JSON Patch for more details.
     // http://www.faqs.org/rfcs/rfc6902.html

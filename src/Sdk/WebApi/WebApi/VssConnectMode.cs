@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿namespace GitHub.Services.WebApi
+namespace GitHub.Services.WebApi
 {
     public enum VssConnectMode
     {
