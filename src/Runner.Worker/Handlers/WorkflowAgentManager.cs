@@ -448,7 +448,7 @@ namespace GitHub.Runner.Worker.Handlers
 
             context.Debug($"Archiving directory inside container: {containerPath} -> {remoteTarPath}");
 
-            var tarArgs = $"-cf {remoteTarPath} -C {parentDir} {dirName}";
+            var tarArgs = $"-cf {remoteTarPath} -C '{parentDir}' '{dirName}'";
             var exitCode = await ExecuteAsync(
                 context,
                 container,
