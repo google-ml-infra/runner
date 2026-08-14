@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using System.Threading.Tasks;
+using System.Threading.Tasks;
 using GitHub.Runner.Common;
 
 namespace GitHub.Runner.Worker.Dap

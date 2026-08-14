@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿#if OS_WINDOWS
+#if OS_WINDOWS
 #pragma warning disable CA1416
 using System;
 using System.Collections;

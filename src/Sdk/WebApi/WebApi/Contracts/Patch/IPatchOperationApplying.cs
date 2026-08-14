@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿namespace GitHub.Services.WebApi.Patch
+namespace GitHub.Services.WebApi.Patch
 {
     /// <summary>
     /// Event for when a patch operation is about to be applied

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using GitHub.DistributedTask.Expressions2;
+using GitHub.DistributedTask.Expressions2;
 using GitHub.DistributedTask.Expressions2.Sdk;
 using GitHub.DistributedTask.ObjectTemplating;
 using System;

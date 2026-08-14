@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿namespace GitHub.DistributedTask.ObjectTemplating.Schema
+namespace GitHub.DistributedTask.ObjectTemplating.Schema
 {
     internal enum DefinitionType
     {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿#if OS_OSX
+#if OS_OSX
 using System;
 using System.IO;
 using System.Collections.Generic;

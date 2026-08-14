@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using System;
+using System;
 using GitHub.Runner.Common;
 using GitHub.Runner.Sdk;
 using GitHub.Services.Common;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using GitHub.Actions.Expressions;
+using GitHub.Actions.Expressions;
 using GitHub.Actions.WorkflowParser.ObjectTemplating.Tokens;
 using GitHub.Actions.Expressions.Data;
 using GitHub.DistributedTask.WebApi;

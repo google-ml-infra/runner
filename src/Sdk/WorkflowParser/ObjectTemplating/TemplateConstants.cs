@@ -15,7 +15,7 @@
 using System;
 using System.Linq;
 
-﻿namespace GitHub.Actions.WorkflowParser.ObjectTemplating
+namespace GitHub.Actions.WorkflowParser.ObjectTemplating
 {
     internal static class TemplateConstants
     {

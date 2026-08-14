@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿// Represents absence of value.
+// Represents absence of value.
 namespace GitHub.Runner.Common
 {
     public readonly struct Unit

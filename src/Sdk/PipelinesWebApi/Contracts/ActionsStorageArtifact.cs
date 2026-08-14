@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-﻿using System.Runtime.Serialization;
+using System.Runtime.Serialization;
 using GitHub.Services.WebApi;
 
 namespace GitHub.Actions.Pipelines.WebApi
