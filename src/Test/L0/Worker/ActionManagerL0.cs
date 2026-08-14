@@ -4195,7 +4195,7 @@ runs:
 
                 // Assert.
                 Assert.NotNull(definition);
-                mockWorkflowAgentManager.Verify(x => x.SyncDirectoryFromWorkflowPodAsync(_ec.Object, It.Is<string>(p => p.Contains(actionDir))), Times.Once);
+                mockWorkflowAgentManager.Verify(x => x.SyncDirectoryFromWorkflowPodAsync(_ec.Object, It.Is<string>(p => Path.GetFullPath(p) == Path.GetFullPath(actionDir))), Times.Once);
             }
             finally
             {

@@ -716,7 +716,7 @@ namespace GitHub.Runner.Worker
                     actionDirectory = executionContext.GetGitHubContext("workspace");
                     if (!string.IsNullOrEmpty(repoAction.Path))
                     {
-                        actionDirectory = Path.Combine(actionDirectory, repoAction.Path);
+                        actionDirectory = Path.Combine(actionDirectory, repoAction.Path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar));
                     }
 
                     if (FeatureManager.IsNoSharedVolumeEnabled() && executionContext.Global.Container != null)
