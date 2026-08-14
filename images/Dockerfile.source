@@ -46,15 +46,15 @@ RUN git config --global --add safe.directory /build \
     && ./dev.sh layout Release ${RUNNER_ARCH}
 
 # Stage 2: Packaging intermediate (base image matches official runner docker image)
-FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-noble AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/runtime-deps:8.0-noble AS build
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 ARG RUNNER_CONTAINER_HOOKS_VERSION=0.7.0
-ARG DOCKER_VERSION=29.5.0
-ARG BUILDX_VERSION=0.34.0
+ARG DOCKER_VERSION=29.6.1
+ARG BUILDX_VERSION=0.35.0
 
-RUN apt update -y && apt install curl unzip -y
+RUN apt update -y && apt install -y curl unzip tar
 
 WORKDIR /actions-runner
 
