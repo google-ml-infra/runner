@@ -122,14 +122,18 @@ namespace GitHub.Runner.Worker.Container
 
             MergeTemplate(pod, templatePod);
 
-            // Extract resource limits and volume mounts if defined in template
-            V1ResourceRequirements resources = null;
-            IList<V1VolumeMount> templateVolumeMounts = null;
-            if (templatePod?.Spec?.Containers != null && templatePod.Spec.Containers.Count > 0)
+            // Find $job container template (prefix '$' or first container)
+            V1Container jobTemplate = null;
+            if (templatePod?.Spec?.Containers != null)
             {
-                resources = templatePod.Spec.Containers[0].Resources;
-                templateVolumeMounts = templatePod.Spec.Containers[0].VolumeMounts;
+                jobTemplate = templatePod.Spec.Containers.FirstOrDefault(c => c.Name == "$job")
+                              ?? templatePod.Spec.Containers.FirstOrDefault(c => c.Name != null && c.Name.StartsWith("$"))
+                              ?? templatePod.Spec.Containers.FirstOrDefault();
             }
+
+            V1ResourceRequirements resources = jobTemplate?.Resources;
+            IList<V1VolumeMount> templateVolumeMounts = jobTemplate?.VolumeMounts;
+            IList<V1EnvVar> templateEnv = jobTemplate?.Env;
 
             // Setup Init Container (Workflow Agent Injector)
             var envAgentImage = Environment.GetEnvironmentVariable("ACTIONS_RUNNER_WORKFLOW_AGENT_IMAGE");
@@ -137,7 +141,19 @@ namespace GitHub.Runner.Worker.Container
             pod.Spec.InitContainers = new List<V1Container> { CreateInitContainer(agentImage) };
 
             // Setup Main Job Container
-            pod.Spec.Containers.Add(CreateJobContainer(jobContainer, isMtlsEnabled, resources, templateVolumeMounts));
+            pod.Spec.Containers.Add(CreateJobContainer(jobContainer, isMtlsEnabled, resources, templateVolumeMounts, templateEnv));
+
+            // Append Sidecar Containers from template (all containers not starting with '$')
+            if (templatePod?.Spec?.Containers != null)
+            {
+                foreach (var container in templatePod.Spec.Containers)
+                {
+                    if (container.Name != null && !container.Name.StartsWith("$"))
+                    {
+                        pod.Spec.Containers.Add(container);
+                    }
+                }
+            }
 
             return pod;
         }
@@ -225,6 +241,10 @@ namespace GitHub.Runner.Worker.Container
                 {
                     pod.Spec.ServiceAccountName = templatePod.Spec.ServiceAccountName;
                 }
+                if (templatePod.Spec.ShareProcessNamespace.HasValue)
+                {
+                    pod.Spec.ShareProcessNamespace = templatePod.Spec.ShareProcessNamespace;
+                }
                 pod.Spec.Affinity = templatePod.Spec.Affinity;
                 pod.Spec.Tolerations = templatePod.Spec.Tolerations;
                 pod.Spec.NodeSelector = templatePod.Spec.NodeSelector;
@@ -245,7 +265,12 @@ namespace GitHub.Runner.Worker.Container
             };
         }
 
-        private V1Container CreateJobContainer(ContainerInfo jobContainer, bool isMtlsEnabled, V1ResourceRequirements resources, IList<V1VolumeMount> templateVolumeMounts)
+        private V1Container CreateJobContainer(
+            ContainerInfo jobContainer,
+            bool isMtlsEnabled,
+            V1ResourceRequirements resources,
+            IList<V1VolumeMount> templateVolumeMounts,
+            IList<V1EnvVar> templateEnv)
         {
             var agentPort = Environment.GetEnvironmentVariable("ACTIONS_RUNNER_WORKFLOW_AGENT_PORT") ?? "50051";
 
@@ -275,6 +300,15 @@ namespace GitHub.Runner.Worker.Container
                 }
             }
 
+            var envList = new List<V1EnvVar>();
+            if (templateEnv != null)
+            {
+                foreach (var env in templateEnv)
+                {
+                    envList.Add(env);
+                }
+            }
+
             return new V1Container
             {
                 Name = "job",
@@ -282,7 +316,8 @@ namespace GitHub.Runner.Worker.Container
                 Command = new List<string> { "/__w/workflow-agent" },
                 Args = new List<string> { "--port", agentPort },
                 VolumeMounts = workflowVolumeMounts,
-                Resources = resources
+                Resources = resources,
+                Env = envList
             };
         }
 
