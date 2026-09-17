@@ -237,6 +237,10 @@ namespace GitHub.Runner.Worker.Container
 
             if (templatePod.Spec != null)
             {
+                if (!string.IsNullOrEmpty(templatePod.Spec.RuntimeClassName))
+                {
+                    pod.Spec.RuntimeClassName = templatePod.Spec.RuntimeClassName;
+                }
                 if (!string.IsNullOrEmpty(templatePod.Spec.ServiceAccountName))
                 {
                     pod.Spec.ServiceAccountName = templatePod.Spec.ServiceAccountName;
