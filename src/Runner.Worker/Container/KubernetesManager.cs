@@ -183,7 +183,10 @@ namespace GitHub.Runner.Worker.Container
         {
             var podVolumes = new List<V1Volume>
             {
-                new V1Volume { Name = "work", EmptyDir = new V1EmptyDirVolumeSource() }
+                new V1Volume { Name = "work", EmptyDir = new V1EmptyDirVolumeSource() },
+                new V1Volume { Name = "externals", EmptyDir = new V1EmptyDirVolumeSource() },
+                new V1Volume { Name = "github-home", EmptyDir = new V1EmptyDirVolumeSource() },
+                new V1Volume { Name = "github-workflow", EmptyDir = new V1EmptyDirVolumeSource() }
             };
 
             if (isMtlsEnabled)
@@ -265,10 +268,11 @@ namespace GitHub.Runner.Worker.Container
             {
                 Name = "agent-injector",
                 Image = agentImage,
-                Command = new List<string> { "sh", "-c", "cp /bin/workflow-agent /workflow/workflow-agent && cp -r /bin/externals /workflow/externals" },
+                Command = new List<string> { "sh", "-c", "cp /bin/workflow-agent /workflow/workflow-agent && cp -r /bin/externals/. /externals/" },
                 VolumeMounts = new List<V1VolumeMount>
                 {
-                    new V1VolumeMount { Name = "work", MountPath = "/workflow" }
+                    new V1VolumeMount { Name = "work", MountPath = "/workflow" },
+                    new V1VolumeMount { Name = "externals", MountPath = "/externals" }
                 }
             };
         }
@@ -285,9 +289,9 @@ namespace GitHub.Runner.Worker.Container
             var workflowVolumeMounts = new List<V1VolumeMount>
             {
                 new V1VolumeMount { Name = "work", MountPath = "/__w" },
-                new V1VolumeMount { Name = "work", MountPath = "/__e", SubPath = "externals" },
-                new V1VolumeMount { Name = "work", MountPath = "/github/home", SubPath = "_temp/_github_home" },
-                new V1VolumeMount { Name = "work", MountPath = "/github/workflow", SubPath = "_temp/_github_workflow" }
+                new V1VolumeMount { Name = "externals", MountPath = "/__e" },
+                new V1VolumeMount { Name = "github-home", MountPath = "/github/home" },
+                new V1VolumeMount { Name = "github-workflow", MountPath = "/github/workflow" }
             };
 
             if (isMtlsEnabled)
