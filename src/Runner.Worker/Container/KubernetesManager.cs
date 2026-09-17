@@ -237,21 +237,25 @@ namespace GitHub.Runner.Worker.Container
 
             if (templatePod.Spec != null)
             {
-                if (!string.IsNullOrEmpty(templatePod.Spec.RuntimeClassName))
+                foreach (var prop in typeof(V1PodSpec).GetProperties())
                 {
-                    pod.Spec.RuntimeClassName = templatePod.Spec.RuntimeClassName;
+                    if (!prop.CanRead || !prop.CanWrite)
+                    {
+                        continue;
+                    }
+                    if (prop.Name == nameof(V1PodSpec.Containers) ||
+                        prop.Name == nameof(V1PodSpec.InitContainers) ||
+                        prop.Name == nameof(V1PodSpec.Volumes) ||
+                        prop.Name == nameof(V1PodSpec.RestartPolicy))
+                    {
+                        continue;
+                    }
+                    var val = prop.GetValue(templatePod.Spec);
+                    if (val != null)
+                    {
+                        prop.SetValue(pod.Spec, val);
+                    }
                 }
-                if (!string.IsNullOrEmpty(templatePod.Spec.ServiceAccountName))
-                {
-                    pod.Spec.ServiceAccountName = templatePod.Spec.ServiceAccountName;
-                }
-                if (templatePod.Spec.ShareProcessNamespace.HasValue)
-                {
-                    pod.Spec.ShareProcessNamespace = templatePod.Spec.ShareProcessNamespace;
-                }
-                pod.Spec.Affinity = templatePod.Spec.Affinity;
-                pod.Spec.Tolerations = templatePod.Spec.Tolerations;
-                pod.Spec.NodeSelector = templatePod.Spec.NodeSelector;
             }
         }
 
