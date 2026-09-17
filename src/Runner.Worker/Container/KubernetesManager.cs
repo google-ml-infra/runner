@@ -183,7 +183,8 @@ namespace GitHub.Runner.Worker.Container
         {
             var podVolumes = new List<V1Volume>
             {
-                new V1Volume { Name = "work", EmptyDir = new V1EmptyDirVolumeSource() }
+                new V1Volume { Name = "work", EmptyDir = new V1EmptyDirVolumeSource() },
+                new V1Volume { Name = "externals", EmptyDir = new V1EmptyDirVolumeSource() }
             };
 
             if (isMtlsEnabled)
@@ -237,21 +238,25 @@ namespace GitHub.Runner.Worker.Container
 
             if (templatePod.Spec != null)
             {
-                if (!string.IsNullOrEmpty(templatePod.Spec.RuntimeClassName))
+                foreach (var prop in typeof(V1PodSpec).GetProperties())
                 {
-                    pod.Spec.RuntimeClassName = templatePod.Spec.RuntimeClassName;
+                    if (!prop.CanRead || !prop.CanWrite)
+                    {
+                        continue;
+                    }
+                    if (prop.Name == nameof(V1PodSpec.Containers) ||
+                        prop.Name == nameof(V1PodSpec.InitContainers) ||
+                        prop.Name == nameof(V1PodSpec.Volumes) ||
+                        prop.Name == nameof(V1PodSpec.RestartPolicy))
+                    {
+                        continue;
+                    }
+                    var val = prop.GetValue(templatePod.Spec);
+                    if (val != null)
+                    {
+                        prop.SetValue(pod.Spec, val);
+                    }
                 }
-                if (!string.IsNullOrEmpty(templatePod.Spec.ServiceAccountName))
-                {
-                    pod.Spec.ServiceAccountName = templatePod.Spec.ServiceAccountName;
-                }
-                if (templatePod.Spec.ShareProcessNamespace.HasValue)
-                {
-                    pod.Spec.ShareProcessNamespace = templatePod.Spec.ShareProcessNamespace;
-                }
-                pod.Spec.Affinity = templatePod.Spec.Affinity;
-                pod.Spec.Tolerations = templatePod.Spec.Tolerations;
-                pod.Spec.NodeSelector = templatePod.Spec.NodeSelector;
             }
         }
 
@@ -261,10 +266,11 @@ namespace GitHub.Runner.Worker.Container
             {
                 Name = "agent-injector",
                 Image = agentImage,
-                Command = new List<string> { "sh", "-c", "cp /bin/workflow-agent /workflow/workflow-agent && cp -r /bin/externals /workflow/externals" },
+                Command = new List<string> { "sh", "-c", "cp /bin/workflow-agent /workflow/workflow-agent && cp -r /bin/externals/. /externals/" },
                 VolumeMounts = new List<V1VolumeMount>
                 {
-                    new V1VolumeMount { Name = "work", MountPath = "/workflow" }
+                    new V1VolumeMount { Name = "work", MountPath = "/workflow" },
+                    new V1VolumeMount { Name = "externals", MountPath = "/externals" }
                 }
             };
         }
@@ -281,9 +287,7 @@ namespace GitHub.Runner.Worker.Container
             var workflowVolumeMounts = new List<V1VolumeMount>
             {
                 new V1VolumeMount { Name = "work", MountPath = "/__w" },
-                new V1VolumeMount { Name = "work", MountPath = "/__e", SubPath = "externals" },
-                new V1VolumeMount { Name = "work", MountPath = "/github/home", SubPath = "_temp/_github_home" },
-                new V1VolumeMount { Name = "work", MountPath = "/github/workflow", SubPath = "_temp/_github_workflow" }
+                new V1VolumeMount { Name = "externals", MountPath = "/__e" }
             };
 
             if (isMtlsEnabled)
@@ -317,8 +321,12 @@ namespace GitHub.Runner.Worker.Container
             {
                 Name = "job",
                 Image = jobContainer.ContainerImage,
-                Command = new List<string> { "/__w/workflow-agent" },
-                Args = new List<string> { "--port", agentPort },
+                Command = new List<string>
+                {
+                    "sh",
+                    "-c",
+                    $"mkdir -p /__w/_temp/_github_home /__w/_temp/_github_workflow /github && ln -sfn /__w/_temp/_github_home /github/home && ln -sfn /__w/_temp/_github_workflow /github/workflow && exec /__w/workflow-agent --port {agentPort}"
+                },
                 VolumeMounts = workflowVolumeMounts,
                 Resources = resources,
                 Env = envList
