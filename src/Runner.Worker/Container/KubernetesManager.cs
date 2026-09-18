@@ -204,7 +204,15 @@ namespace GitHub.Runner.Worker.Container
             {
                 foreach (var v in templatePod.Spec.Volumes)
                 {
-                    podVolumes.Add(v);
+                    var existingIdx = podVolumes.FindIndex(x => x.Name == v.Name);
+                    if (existingIdx >= 0)
+                    {
+                        podVolumes[existingIdx] = v;
+                    }
+                    else
+                    {
+                        podVolumes.Add(v);
+                    }
                 }
             }
 
@@ -304,7 +312,15 @@ namespace GitHub.Runner.Worker.Container
             {
                 foreach (var vm in templateVolumeMounts)
                 {
-                    workflowVolumeMounts.Add(vm);
+                    var existingIdx = workflowVolumeMounts.FindIndex(x => x.MountPath == vm.MountPath);
+                    if (existingIdx >= 0)
+                    {
+                        workflowVolumeMounts[existingIdx] = vm;
+                    }
+                    else
+                    {
+                        workflowVolumeMounts.Add(vm);
+                    }
                 }
             }
 
