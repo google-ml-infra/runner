@@ -44,7 +44,7 @@ namespace GitHub.Runner.Worker.Handlers
             var handler = new SocketsHttpHandler
             {
                 KeepAlivePingDelay = TimeSpan.FromSeconds(30),
-                KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+                KeepAlivePingTimeout = TimeSpan.FromSeconds(120),
                 KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always
             };
 
