@@ -1,4 +1,18 @@
-﻿using System;
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -16,6 +30,7 @@ using GitHub.Runner.Common;
 using GitHub.Runner.Common.Util;
 using GitHub.Runner.Sdk;
 using GitHub.Runner.Worker.Container;
+using GitHub.Runner.Worker.Handlers;
 using GitHub.Services.Common;
 using Pipelines = GitHub.DistributedTask.Pipelines;
 using PipelineTemplateConstants = GitHub.DistributedTask.Pipelines.ObjectTemplating.PipelineTemplateConstants;
@@ -140,7 +155,7 @@ namespace GitHub.Runner.Worker
                 executionContext.Result = TaskResult.Failed;
                 throw;
             }
-            if (!FeatureManager.IsContainerHooksEnabled(executionContext.Global.Variables))
+            if (!FeatureManager.IsContainerHooksEnabled(executionContext.Global.Variables) && !FeatureManager.IsNoSharedVolumeEnabled())
             {
                 if (state.ImagesToPull.Count > 0)
                 {
@@ -669,7 +684,7 @@ namespace GitHub.Runner.Worker
 
             if (action.Reference.Type == Pipelines.ActionSourceType.ContainerRegistry)
             {
-                if (FeatureManager.IsContainerHooksEnabled(executionContext.Global.Variables))
+                if (FeatureManager.IsContainerHooksEnabled(executionContext.Global.Variables) || FeatureManager.IsNoSharedVolumeEnabled())
                 {
                     Trace.Info("Load action that will run container through container hooks.");
                     var containerAction = action.Reference as Pipelines.ContainerRegistryReference;
@@ -701,7 +716,13 @@ namespace GitHub.Runner.Worker
                     actionDirectory = executionContext.GetGitHubContext("workspace");
                     if (!string.IsNullOrEmpty(repoAction.Path))
                     {
-                        actionDirectory = Path.Combine(actionDirectory, repoAction.Path);
+                        actionDirectory = Path.Combine(actionDirectory, repoAction.Path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar));
+                    }
+
+                    if (FeatureManager.IsNoSharedVolumeEnabled() && executionContext.Global.Container != null)
+                    {
+                        var workflowAgentManager = HostContext.GetService<IWorkflowAgentManager>();
+                        workflowAgentManager.SyncDirectoryFromWorkflowPodAsync(executionContext, actionDirectory).GetAwaiter().GetResult();
                     }
                 }
                 else if (string.Equals(repoAction.RepositoryType, Pipelines.PipelineConstants.SelfRepositoryAlias, StringComparison.OrdinalIgnoreCase))

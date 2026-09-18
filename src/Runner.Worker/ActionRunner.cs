@@ -1,4 +1,18 @@
-﻿using System;
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using GitHub.DistributedTask.ObjectTemplating;
@@ -158,7 +172,7 @@ namespace GitHub.Runner.Worker
             {
                 // Make sure the required container is already created
                 // Container hooks do not necessarily set 'ContainerId'
-                if (!FeatureManager.IsContainerHooksEnabled(ExecutionContext.Global.Variables))
+                if (!FeatureManager.IsContainerHooksEnabled(ExecutionContext.Global.Variables) && !FeatureManager.IsNoSharedVolumeEnabled())
                 {
                     ArgUtil.NotNullOrEmpty(ExecutionContext.Global.Container.ContainerId, nameof(ExecutionContext.Global.Container.ContainerId));
                 }
@@ -169,7 +183,8 @@ namespace GitHub.Runner.Worker
 
             // Setup File Command Manager
             var fileCommandManager = HostContext.CreateService<IFileCommandManager>();
-            fileCommandManager.InitializeFiles(ExecutionContext, null);
+            var targetContainer = FeatureManager.IsNoSharedVolumeEnabled() ? ExecutionContext.Global.Container : null;
+            fileCommandManager.InitializeFiles(ExecutionContext, targetContainer);
 
             // Load the inputs.
             ExecutionContext.Debug("Loading inputs");
@@ -271,6 +286,12 @@ namespace GitHub.Runner.Worker
 
             // Print out action details and log telemetry
             handler.PrepareExecution(Stage);
+
+            if (FeatureManager.IsNoSharedVolumeEnabled() && definition != null && !string.IsNullOrEmpty(definition.Directory) && System.IO.Directory.Exists(definition.Directory))
+            {
+                var workflowAgentManager = HostContext.GetService<IWorkflowAgentManager>();
+                await workflowAgentManager.SyncDirectoryToWorkflowPodAsync(ExecutionContext, definition.Directory);
+            }
 
             // Run the task.
             try
