@@ -95,6 +95,7 @@ namespace GitHub.Runner.Common.Tests.Worker
             hostContext.SetSingleton<IExtensionManager>(extensionManager.Object);
 
             var ec = new Mock<IExecutionContext>();
+            ec.Setup(x => x.Global).Returns(new GlobalContext());
             ec.Setup(x => x.SetGitHubContext(It.IsAny<string>(), It.IsAny<string>()));
             executionContext = ec.Object;
 
