@@ -58,6 +58,30 @@ namespace GitHub.Runner.Common.Tests.Worker
             }
         }
 
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void ProcessFiles_RejectsSymlinkedCommandFile()
+        {
+            using (var hostContext = Setup(out var executionContext, out var ext))
+            {
+                var manager = new FileCommandManager();
+                manager.Initialize(hostContext);
+                manager.InitializeFiles(executionContext, null);
+
+                var commandFile = ext.LastPopulatedPath;
+                var targetFile = Path.Combine(hostContext.GetDirectory(WellKnownDirectory.Work), "secret-target");
+                File.WriteAllText(targetFile, "SECRET");
+
+                File.Delete(commandFile);
+                File.CreateSymbolicLink(commandFile, targetFile);
+
+                manager.ProcessFiles(executionContext, null);
+
+                Assert.Equal(0, ext.ProcessCallCount);
+            }
+        }
+
         private TestHostContext Setup(out IExecutionContext executionContext, out RecordingFileCommand recordingExtension, [CallerMemberName] string name = "")
         {
             var hostContext = new TestHostContext(this, name);
@@ -97,8 +121,11 @@ namespace GitHub.Runner.Common.Tests.Worker
                 }
             }
 
+            public int ProcessCallCount { get; private set; }
+
             public void ProcessCommand(IExecutionContext context, string filePath, ContainerInfo container)
             {
+                ProcessCallCount++;
             }
         }
     }
