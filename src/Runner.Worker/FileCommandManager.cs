@@ -4,6 +4,7 @@ using GitHub.Runner.Common;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace GitHub.Runner.Worker
@@ -41,25 +42,35 @@ namespace GitHub.Runner.Worker
 
         public void InitializeFiles(IExecutionContext context, ContainerInfo container)
         {
+            var workDir = HostContext.GetDirectory(WellKnownDirectory.Work);
+            EnsureSafeDirectoryHierarchy(workDir, _fileCommandDirectory);
+            if (!Directory.Exists(_fileCommandDirectory))
+            {
+                Directory.CreateDirectory(_fileCommandDirectory);
+            }
+
             var oldSuffix = _fileSuffix;
             _fileSuffix = Guid.NewGuid().ToString();
             foreach (var fileCommand in _commandExtensions)
             {
                 var oldPath = Path.Combine(_fileCommandDirectory, fileCommand.FilePrefix + oldSuffix);
-                if (oldSuffix != String.Empty && File.Exists(oldPath))
+                if (oldSuffix != String.Empty)
                 {
                     TryDeleteFile(oldPath);
                 }
 
                 var newPath = Path.Combine(_fileCommandDirectory, fileCommand.FilePrefix + _fileSuffix);
                 TryDeleteFile(newPath);
-                File.Create(newPath).Dispose();
+                using (new FileStream(newPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                }
 
                 // Give extensions a chance to populate the file before
                 // the step starts (e.g., read-only views of job state).
                 // Errors are logged but must not fail step setup.
                 try
                 {
+                    RejectIfSymlink(newPath);
                     fileCommand.PopulateInitialContents(context, newPath, container);
                 }
                 catch (Exception ex)
@@ -74,11 +85,16 @@ namespace GitHub.Runner.Worker
 
         public void ProcessFiles(IExecutionContext context, ContainerInfo container)
         {
+            var workDir = HostContext.GetDirectory(WellKnownDirectory.Work);
+
             foreach (var fileCommand in _commandExtensions)
             {
                 try
                 {
-                    fileCommand.ProcessCommand(context, Path.Combine(_fileCommandDirectory, fileCommand.FilePrefix + _fileSuffix), container);
+                    var cmdPath = Path.Combine(_fileCommandDirectory, fileCommand.FilePrefix + _fileSuffix);
+                    EnsureSafeDirectoryHierarchy(workDir, _fileCommandDirectory);
+                    RejectIfSymlink(cmdPath);
+                    fileCommand.ProcessCommand(context, cmdPath, container);
                 }
                 catch (Exception ex)
                 {
@@ -89,9 +105,104 @@ namespace GitHub.Runner.Worker
             }
         }
 
+        internal static void EnsureSafeDirectoryHierarchy(string workDir, string targetDir)
+        {
+            if (string.IsNullOrEmpty(workDir) || string.IsNullOrEmpty(targetDir))
+            {
+                return;
+            }
+
+            var fullWorkDir = Path.GetFullPath(workDir).TrimEnd(Path.DirectorySeparatorChar);
+            var current = new DirectoryInfo(Path.GetFullPath(targetDir));
+
+            while (current != null && current.FullName.StartsWith(fullWorkDir, StringComparison.Ordinal))
+            {
+                if (current.LinkTarget != null ||
+                    (current.Exists && current.Attributes.HasFlag(FileAttributes.ReparsePoint)))
+                {
+                    throw new InvalidOperationException($"Refusing to traverse symbolic link directory '{current.FullName}'.");
+                }
+
+                if (string.Equals(current.FullName.TrimEnd(Path.DirectorySeparatorChar), fullWorkDir, StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                current = current.Parent;
+            }
+        }
+
+        internal static void RejectIfSymlink(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            var fileInfo = new FileInfo(path);
+            if (fileInfo.LinkTarget != null ||
+                (fileInfo.Exists && fileInfo.Attributes.HasFlag(FileAttributes.ReparsePoint)))
+            {
+                throw new InvalidOperationException($"Refusing to access symbolic link at '{path}'.");
+            }
+
+            var dirInfo = new DirectoryInfo(path);
+            if (dirInfo.LinkTarget != null ||
+                (dirInfo.Exists && dirInfo.Attributes.HasFlag(FileAttributes.ReparsePoint)))
+            {
+                throw new InvalidOperationException($"Refusing to access symbolic link directory at '{path}'.");
+            }
+        }
+
+        internal static FileStream OpenSafeFileCommandReadStream(string filePath, string workDir = null)
+        {
+            var fullFilePath = Path.GetFullPath(filePath);
+            var parentDir = Path.GetDirectoryName(fullFilePath);
+            if (!string.IsNullOrEmpty(workDir))
+            {
+                EnsureSafeDirectoryHierarchy(workDir, parentDir);
+            }
+            else if (!string.IsNullOrEmpty(parentDir))
+            {
+                RejectIfSymlink(parentDir);
+            }
+            RejectIfSymlink(fullFilePath);
+
+            var fs = new FileStream(fullFilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            try
+            {
+                RejectIfSymlink(fullFilePath);
+
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                {
+                    var fdPath = $"/proc/self/fd/{fs.SafeFileHandle.DangerousGetHandle()}";
+                    var resolvedTarget = File.ResolveLinkTarget(fdPath, returnFinalTarget: false);
+                    var canonicalParent = (!string.IsNullOrEmpty(parentDir)
+                        ? Directory.ResolveLinkTarget(parentDir, returnFinalTarget: true)?.FullName
+                        : null) ?? parentDir;
+                    var expectedPath = Path.Combine(canonicalParent, Path.GetFileName(fullFilePath));
+
+                    if (resolvedTarget == null ||
+                        !string.Equals(resolvedTarget.FullName, expectedPath, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            $"Opened file descriptor for '{filePath}' resolved to unexpected target '{resolvedTarget?.FullName}'.");
+                    }
+                }
+
+                return fs;
+            }
+            catch
+            {
+                fs.Dispose();
+                throw;
+            }
+        }
+
         private bool TryDeleteFile(string path)
         {
-            if (!File.Exists(path))
+            var fileInfo = new FileInfo(path);
+            if (!fileInfo.Exists && fileInfo.LinkTarget == null)
             {
                 return true;
             }
@@ -133,9 +244,17 @@ namespace GitHub.Runner.Worker
 
         public void ProcessCommand(IExecutionContext context, string filePath, ContainerInfo container)
         {
+            var workDir = HostContext.GetDirectory(WellKnownDirectory.Work);
+            FileCommandManager.EnsureSafeDirectoryHierarchy(workDir, Path.GetDirectoryName(Path.GetFullPath(filePath)));
+            FileCommandManager.RejectIfSymlink(filePath);
             if (File.Exists(filePath))
             {
-                var lines = File.ReadAllLines(filePath, Encoding.UTF8);
+                string[] lines;
+                using (var stream = FileCommandManager.OpenSafeFileCommandReadStream(filePath, workDir))
+                using (var reader = new StreamReader(stream, Encoding.UTF8))
+                {
+                    lines = reader.ReadToEnd().Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+                }
                 foreach (var line in lines)
                 {
                     if (line == string.Empty)
@@ -229,7 +348,7 @@ namespace GitHub.Runner.Worker
 
         public void ProcessCommand(IExecutionContext context, string filePath, ContainerInfo container)
         {
-            if (String.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+            if (String.IsNullOrEmpty(filePath))
             {
                 Trace.Info($"Step Summary file ({filePath}) does not exist; skipping attachment upload");
                 return;
@@ -237,32 +356,55 @@ namespace GitHub.Runner.Worker
 
             try
             {
-                var fileSize = new FileInfo(filePath).Length;
-                if (fileSize == 0)
+                var workDir = HostContext.GetDirectory(WellKnownDirectory.Work);
+                FileCommandManager.EnsureSafeDirectoryHierarchy(workDir, Path.GetDirectoryName(Path.GetFullPath(filePath)));
+                FileCommandManager.RejectIfSymlink(filePath);
+
+                if (!File.Exists(filePath))
                 {
-                    Trace.Info($"Step Summary file ({filePath}) is empty; skipping attachment upload");
+                    Trace.Info($"Step Summary file ({filePath}) does not exist; skipping attachment upload");
                     return;
                 }
 
-                if (fileSize > AttachmentSizeLimit)
+                var scrubbedDir = Path.Combine(HostContext.GetDirectory(WellKnownDirectory.Diag), "_step_summaries");
+                Directory.CreateDirectory(scrubbedDir);
+                var scrubbedFilePath = Path.Combine(scrubbedDir, Path.GetFileName(filePath) + "-scrubbed");
+                FileCommandManager.RejectIfSymlink(scrubbedFilePath);
+                var existingScrubbed = new FileInfo(scrubbedFilePath);
+                if (existingScrubbed.Exists || existingScrubbed.LinkTarget != null)
                 {
-                    context.Error(String.Format(Constants.Runner.UnsupportedSummarySize, AttachmentSizeLimit / 1024, fileSize / 1024));
-                    Trace.Info($"Step Summary file ({filePath}) is too large ({fileSize} bytes); skipping attachment upload");
-
-                    return;
+                    File.Delete(scrubbedFilePath);
                 }
 
-                Trace.Verbose($"Step Summary file exists: {filePath} and has a file size of {fileSize} bytes");
-                var scrubbedFilePath = filePath + "-scrubbed";
-
-                using (var streamReader = new StreamReader(filePath))
-                using (var streamWriter = new StreamWriter(scrubbedFilePath))
+                using (var readStream = FileCommandManager.OpenSafeFileCommandReadStream(filePath, workDir))
                 {
-                    string line;
-                    while ((line = streamReader.ReadLine()) != null)
+                    var fileSize = readStream.Length;
+                    if (fileSize == 0)
                     {
-                        var maskedLine = HostContext.SecretMasker.MaskSecrets(line);
-                        streamWriter.WriteLine(maskedLine);
+                        Trace.Info($"Step Summary file ({filePath}) is empty; skipping attachment upload");
+                        return;
+                    }
+
+                    if (fileSize > AttachmentSizeLimit)
+                    {
+                        context.Error(String.Format(Constants.Runner.UnsupportedSummarySize, AttachmentSizeLimit / 1024, fileSize / 1024));
+                        Trace.Info($"Step Summary file ({filePath}) is too large ({fileSize} bytes); skipping attachment upload");
+
+                        return;
+                    }
+
+                    Trace.Verbose($"Step Summary file exists: {filePath} and has a file size of {fileSize} bytes");
+
+                    using (var streamReader = new StreamReader(readStream))
+                    using (var writeStream = new FileStream(scrubbedFilePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    using (var streamWriter = new StreamWriter(writeStream))
+                    {
+                        string line;
+                        while ((line = streamReader.ReadLine()) != null)
+                        {
+                            var maskedLine = HostContext.SecretMasker.MaskSecrets(line);
+                            streamWriter.WriteLine(maskedLine);
+                        }
                     }
                 }
 
@@ -366,7 +508,11 @@ namespace GitHub.Runner.Worker
             var text = string.Empty;
             try
             {
-                text = File.ReadAllText(_filePath) ?? string.Empty;
+                using (var stream = FileCommandManager.OpenSafeFileCommandReadStream(_filePath))
+                using (var reader = new StreamReader(stream))
+                {
+                    text = reader.ReadToEnd() ?? string.Empty;
+                }
             }
             catch (DirectoryNotFoundException)
             {

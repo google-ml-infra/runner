@@ -126,10 +126,12 @@ namespace GitHub.Runner.Common.Tests.Worker
                 };
                 WriteContent(stepSummaryFile, content);
 
+                var expectedScrubbedFile = Path.Combine(hostContext.GetDirectory(WellKnownDirectory.Diag), "_step_summaries", Path.GetFileName(stepSummaryFile) + "-scrubbed");
+
                 _createStepCommand.ProcessCommand(_executionContext.Object, stepSummaryFile, null);
                 _jobExecutionContext.Complete();
 
-                _jobServerQueue.Verify(x => x.QueueFileUpload(It.IsAny<Guid>(), It.IsAny<Guid>(), ChecksAttachmentType.StepSummary, _executionContext.Object.Id.ToString(), stepSummaryFile + "-scrubbed", It.IsAny<bool>()), Times.Once());
+                _jobServerQueue.Verify(x => x.QueueFileUpload(It.IsAny<Guid>(), It.IsAny<Guid>(), ChecksAttachmentType.StepSummary, _executionContext.Object.Id.ToString(), expectedScrubbedFile, It.IsAny<bool>()), Times.Once());
                 Assert.Equal(0, _issues.Count);
             }
         }
@@ -146,7 +148,7 @@ namespace GitHub.Runner.Common.Tests.Worker
                 hostContext.SecretMasker.AddRegex("ghs_.*");
 
                 var stepSummaryFile = Path.Combine(_rootDirectory, "simple");
-                var scrubbedFile = stepSummaryFile + "-scrubbed";
+                var scrubbedFile = Path.Combine(hostContext.GetDirectory(WellKnownDirectory.Diag), "_step_summaries", Path.GetFileName(stepSummaryFile) + "-scrubbed");
                 var content = new List<string>
                 {
                     "# Password=ThisIsMySecretPassword!",
@@ -164,6 +166,89 @@ namespace GitHub.Runner.Common.Tests.Worker
 
                 _jobServerQueue.Verify(x => x.QueueFileUpload(It.IsAny<Guid>(), It.IsAny<Guid>(), ChecksAttachmentType.StepSummary, _executionContext.Object.Id.ToString(), scrubbedFile, It.IsAny<bool>()), Times.Once());
                 Assert.Equal(0, _issues.Count);
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void CreateStepSummaryCommand_DoesNotOverwriteSymlinkedScrubbedFile()
+        {
+            using (var hostContext = Setup())
+            {
+                var victimFile = Path.Combine(_rootDirectory, "victim-file");
+                File.WriteAllText(victimFile, "DO_NOT_OVERWRITE");
+
+                var stepSummaryFile = Path.Combine(_rootDirectory, "summary-symlink-scrubbed");
+                WriteContent(stepSummaryFile, new List<string> { "# Attacker summary" });
+
+                var attackerSymlink = stepSummaryFile + "-scrubbed";
+                if (File.Exists(attackerSymlink))
+                {
+                    File.Delete(attackerSymlink);
+                }
+                File.CreateSymbolicLink(attackerSymlink, victimFile);
+
+                _createStepCommand.ProcessCommand(_executionContext.Object, stepSummaryFile, null);
+                _jobExecutionContext.Complete();
+
+                Assert.Equal("DO_NOT_OVERWRITE", File.ReadAllText(victimFile));
+                var expectedScrubbedFile = Path.Combine(hostContext.GetDirectory(WellKnownDirectory.Diag), "_step_summaries", Path.GetFileName(stepSummaryFile) + "-scrubbed");
+                _jobServerQueue.Verify(x => x.QueueFileUpload(It.IsAny<Guid>(), It.IsAny<Guid>(), ChecksAttachmentType.StepSummary, _executionContext.Object.Id.ToString(), expectedScrubbedFile, It.IsAny<bool>()), Times.Once());
+                Assert.Equal(0, _issues.Count);
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void CreateStepSummaryCommand_RejectsSymlinkedSummaryFile()
+        {
+            using (var hostContext = Setup())
+            {
+                var secretFile = Path.Combine(_rootDirectory, "secret-file");
+                File.WriteAllText(secretFile, "SENSITIVE_RUNNER_CREDENTIALS");
+
+                var stepSummaryFile = Path.Combine(_rootDirectory, "symlink-summary");
+                if (File.Exists(stepSummaryFile))
+                {
+                    File.Delete(stepSummaryFile);
+                }
+                File.CreateSymbolicLink(stepSummaryFile, secretFile);
+
+                _createStepCommand.ProcessCommand(_executionContext.Object, stepSummaryFile, null);
+                _jobExecutionContext.Complete();
+
+                _jobServerQueue.Verify(x => x.QueueFileUpload(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()), Times.Never());
+                Assert.Equal(1, _issues.Count);
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void CreateStepSummaryCommand_RejectsSymlinkedParentDirectory()
+        {
+            using (var hostContext = Setup())
+            {
+                var targetDir = Path.Combine(_rootDirectory, "target-dir");
+                Directory.CreateDirectory(targetDir);
+                var targetFile = Path.Combine(targetDir, "summary");
+                WriteContent(targetFile, new List<string> { "# Content" });
+
+                var symlinkDir = Path.Combine(_rootDirectory, "symlink-dir");
+                if (Directory.Exists(symlinkDir))
+                {
+                    Directory.Delete(symlinkDir);
+                }
+                Directory.CreateSymbolicLink(symlinkDir, targetDir);
+
+                var stepSummaryFile = Path.Combine(symlinkDir, "summary");
+                _createStepCommand.ProcessCommand(_executionContext.Object, stepSummaryFile, null);
+                _jobExecutionContext.Complete();
+
+                _jobServerQueue.Verify(x => x.QueueFileUpload(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()), Times.Never());
+                Assert.Equal(1, _issues.Count);
             }
         }
 
