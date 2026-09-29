@@ -82,24 +82,43 @@ namespace GitHub.Runner.Worker
 
             Trace.Info($"Processing $GITHUB_ARTIFACTS file '{filePath}'");
 
-            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+            if (string.IsNullOrEmpty(filePath))
             {
                 Trace.Info("$GITHUB_ARTIFACTS file does not exist; nothing to process.");
                 return;
             }
 
-            var fileSize = new FileInfo(filePath).Length;
-            if (fileSize == 0)
+            var workDir = HostContext.GetDirectory(WellKnownDirectory.Work);
+            FileCommandManager.EnsureSafeDirectoryHierarchy(workDir, Path.GetDirectoryName(Path.GetFullPath(filePath)));
+            FileCommandManager.RejectIfSymlink(filePath);
+
+            if (!File.Exists(filePath))
             {
-                Trace.Info("$GITHUB_ARTIFACTS file is empty; nothing to process.");
+                Trace.Info("$GITHUB_ARTIFACTS file does not exist; nothing to process.");
                 return;
             }
-            if (fileSize > MaxFileSizeBytes)
+
+            string[] lines;
+            using (var readStream = FileCommandManager.OpenSafeFileCommandReadStream(filePath, workDir))
             {
-                throw new Exception(StringUtil.Format(
-                    Constants.Runner.ArtifactsFileSizeExceeded,
-                    MaxFileSizeBytes / 1024,
-                    fileSize / 1024));
+                var fileSize = readStream.Length;
+                if (fileSize == 0)
+                {
+                    Trace.Info("$GITHUB_ARTIFACTS file is empty; nothing to process.");
+                    return;
+                }
+                if (fileSize > MaxFileSizeBytes)
+                {
+                    throw new Exception(StringUtil.Format(
+                        Constants.Runner.ArtifactsFileSizeExceeded,
+                        MaxFileSizeBytes / 1024,
+                        fileSize / 1024));
+                }
+
+                using (var reader = new StreamReader(readStream, Encoding.UTF8))
+                {
+                    lines = reader.ReadToEnd().Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+                }
             }
 
             // Per-step subjects parsed from this file; aggregated into the
@@ -114,8 +133,6 @@ namespace GitHub.Runner.Worker
             // the workspace root regardless of any step-level
             // `working-directory:`.
             var workspaceRoot = ResolveWorkspaceRoot(context);
-
-            var lines = File.ReadAllLines(filePath, Encoding.UTF8);
             for (var i = 0; i < lines.Length; i++)
             {
                 var lineNumber = i + 1;
