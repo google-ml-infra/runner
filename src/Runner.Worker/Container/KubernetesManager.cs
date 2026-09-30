@@ -352,7 +352,7 @@ namespace GitHub.Runner.Worker.Container
         private async Task<string> WaitForPodIPAsync(IKubernetes client, string podName, string namespaceVal, IExecutionContext context)
         {
             string lastPhase = null;
-            var timeout = DateTime.UtcNow.AddMinutes(5);
+            var timeout = DateTime.UtcNow.AddMinutes(10);
             while (DateTime.UtcNow < timeout)
             {
                 await Task.Delay(2000);
