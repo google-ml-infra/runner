@@ -384,7 +384,8 @@ namespace GitHub.Runner.Worker.Container
 
             while (true)
             {
-                await Task.Delay(2000, context.CancellationToken);
+                var pollDelayMs = (!scheduledAt.HasValue && (DateTime.UtcNow - startTime).TotalSeconds >= 30) ? 10000 : 2000;
+                await Task.Delay(pollDelayMs, context.CancellationToken);
                 var polledPod = await ExecuteK8sRequestAsync(context, async () =>
                 {
                     return await client.CoreV1.ReadNamespacedPodStatusAsync(podName, namespaceVal, cancellationToken: context.CancellationToken);
@@ -410,7 +411,7 @@ namespace GitHub.Runner.Worker.Container
                 bool isScheduled = scheduledAt.HasValue || string.Equals(scheduledCond?.Status, "True", StringComparison.OrdinalIgnoreCase);
                 if (!isScheduled)
                 {
-                    if (!lastLogTime.HasValue || (now - lastLogTime.Value).TotalSeconds >= 60)
+                    if ((!lastLogTime.HasValue && (now - startTime).TotalSeconds >= 10) || (lastLogTime.HasValue && (now - lastLogTime.Value).TotalSeconds >= 60))
                     {
                         var reason = scheduledCond?.Message ?? scheduledCond?.Reason ?? phase ?? "Pending";
                         var category = "[Pending Scheduling]";
@@ -451,15 +452,16 @@ namespace GitHub.Runner.Worker.Container
                             // Best-effort event lookup; fall back to PodScheduled condition message
                         }
 
-                        lastUnscheduledReason = $"{category} {reason}";
+                        lastUnscheduledReason = category;
                         var elapsed = (int)(now - startTime).TotalSeconds;
                         var remainingMin = Math.Max(1, (int)Math.Ceiling((schedulingTimeout - (now - startTime)).TotalMinutes));
-                        context.Output($"{category} Waiting for workflow pod {podName} to be scheduled ({elapsed}s elapsed, retrying every 2s, next update in 60s, timeout in {remainingMin}m): {reason}");
+                        context.Output($"{category} Waiting for workflow pod {podName} to be scheduled ({elapsed}s elapsed, next update in 60s, timeout in {remainingMin}m)");
+                        context.Debug($"{category} Workflow pod {podName} scheduling detail: {reason}");
                         lastLogTime = now;
                     }
                     if (now - startTime >= schedulingTimeout)
                     {
-                        throw new TimeoutException($"Timed out after {(int)schedulingTimeout.TotalMinutes}m waiting for workflow pod {podName} to be scheduled: {lastUnscheduledReason ?? scheduledCond?.Message ?? "Pending"}");
+                        throw new TimeoutException($"{lastUnscheduledReason ?? "[Pending Scheduling]"} Timed out after {(int)schedulingTimeout.TotalMinutes}m waiting for workflow pod {podName} to be scheduled.");
                     }
                     continue;
                 }
