@@ -73,6 +73,14 @@ namespace GitHub.Runner.Worker.Container
             // Build Pod object
             var pod = BuildPodSpec(context, podName, jobContainer);
 
+            // Tie the workflow pod to the runner pod so it can't outlive it: a runner-pod label for
+            // orphan detection and an owner reference so Kubernetes GC deletes it with the runner pod.
+            if (!string.IsNullOrEmpty(runnerPodName))
+            {
+                var ownerRef = await GetRunnerPodOwnerReferenceAsync(context, client, runnerPodName, namespaceVal);
+                ApplyRunnerPodLink(pod, runnerPodName, ownerRef);
+            }
+
             context.Debug($"Creating workflow pod {podName} using Kubernetes C# client...");
             await ExecuteK8sRequestAsync(context, async () =>
             {
@@ -480,6 +488,72 @@ namespace GitHub.Runner.Worker.Container
             }
         }
 
+
+        internal const string RunnerPodLabelKey = "runner-pod";
+        private const int MaxLabelValueLength = 63;
+
+        // Looks up the runner pod's UID so the workflow pod can reference it as its owner. The UID must come
+        // from the API: an owner reference to a non-existent UID makes Kubernetes GC delete the workflow pod
+        // immediately. On any lookup failure we fall back to no owner reference rather than failing the job.
+        private async Task<V1OwnerReference> GetRunnerPodOwnerReferenceAsync(IExecutionContext context, IKubernetes client, string runnerPodName, string namespaceVal)
+        {
+            try
+            {
+                var runnerPod = await client.CoreV1.ReadNamespacedPodAsync(runnerPodName, namespaceVal, cancellationToken: context.CancellationToken);
+                var ownerRef = BuildRunnerPodOwnerReference(runnerPod);
+                if (ownerRef == null)
+                {
+                    context.Warning($"Warning: Runner pod {runnerPodName} has no UID; workflow pod will not be garbage-collected with the runner pod.");
+                }
+                return ownerRef;
+            }
+            catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                context.Warning($"Warning: Failed to look up runner pod {runnerPodName} for owner reference; workflow pod will not be garbage-collected with the runner pod: {ex.Message}");
+                return null;
+            }
+        }
+
+        internal static V1OwnerReference BuildRunnerPodOwnerReference(V1Pod runnerPod)
+        {
+            if (string.IsNullOrEmpty(runnerPod?.Metadata?.Uid) || string.IsNullOrEmpty(runnerPod.Metadata.Name))
+            {
+                return null;
+            }
+
+            // Controller and BlockOwnerDeletion are intentionally left unset: the runner pod is not a controller,
+            // and blocking owner deletion would need extra RBAC and delay runner pod deletion.
+            return new V1OwnerReference
+            {
+                ApiVersion = "v1",
+                Kind = "Pod",
+                Name = runnerPod.Metadata.Name,
+                Uid = runnerPod.Metadata.Uid
+            };
+        }
+
+        // Adds the runner-pod=<runnerPodName> label (same key as runner-container-hooks) and, if available,
+        // an owner reference to the runner pod. Pod names can exceed the 63-char label value limit, in which
+        // case the label is skipped rather than failing pod creation.
+        internal static void ApplyRunnerPodLink(V1Pod pod, string runnerPodName, V1OwnerReference ownerRef)
+        {
+            pod.Metadata ??= new V1ObjectMeta();
+            if (runnerPodName.Length <= MaxLabelValueLength)
+            {
+                pod.Metadata.Labels ??= new Dictionary<string, string>();
+                pod.Metadata.Labels[RunnerPodLabelKey] = runnerPodName;
+            }
+
+            if (ownerRef != null)
+            {
+                pod.Metadata.OwnerReferences ??= new List<V1OwnerReference>();
+                pod.Metadata.OwnerReferences.Add(ownerRef);
+            }
+        }
 
         private async Task<T> ExecuteK8sRequestAsync<T>(IExecutionContext context, Func<Task<T>> request)
         {
