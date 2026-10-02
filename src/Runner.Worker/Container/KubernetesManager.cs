@@ -76,13 +76,29 @@ namespace GitHub.Runner.Worker.Container
             context.Debug($"Creating workflow pod {podName} using Kubernetes C# client...");
             await ExecuteK8sRequestAsync(context, async () =>
             {
-                return await client.CoreV1.CreateNamespacedPodAsync(pod, namespaceVal);
+                return await client.CoreV1.CreateNamespacedPodAsync(pod, namespaceVal, cancellationToken: context.CancellationToken);
             });
 
             context.Output($"Workflow pod '{podName}' created successfully. Waiting for readiness and Pod IP...");
 
-            // Wait for readiness and resolve IP
-            string podIP = await WaitForPodIPAsync(client, podName, namespaceVal, context);
+            // Wait for readiness and resolve IP; clean up pod if wait fails or is canceled
+            string podIP;
+            try
+            {
+                podIP = await WaitForPodIPAsync(client, podName, namespaceVal, context);
+            }
+            catch
+            {
+                try
+                {
+                    await client.CoreV1.DeleteNamespacedPodAsync(podName, namespaceVal);
+                }
+                catch (Exception cleanupEx)
+                {
+                    context.Warning($"Warning: Failed to clean up workflow pod {podName}: {cleanupEx.Message}");
+                }
+                throw;
+            }
 
             jobContainer.ContainerIP = podIP;
             jobContainer.IsAlpine = false;
@@ -349,39 +365,117 @@ namespace GitHub.Runner.Worker.Container
             };
         }
 
+        private static TimeSpan GetTimeoutMinutes(string envVar, int defaultMinutes)
+        {
+            return int.TryParse(Environment.GetEnvironmentVariable(envVar), out var m) && m > 0
+                ? TimeSpan.FromMinutes(m)
+                : TimeSpan.FromMinutes(defaultMinutes);
+        }
+
         private async Task<string> WaitForPodIPAsync(IKubernetes client, string podName, string namespaceVal, IExecutionContext context)
         {
+            var schedulingTimeout = GetTimeoutMinutes("ACTIONS_RUNNER_WORKFLOW_POD_SCHEDULING_TIMEOUT_MINUTES", 60);
+            var startupTimeout = GetTimeoutMinutes("ACTIONS_RUNNER_WORKFLOW_POD_STARTUP_TIMEOUT_MINUTES", 10);
+            var startTime = DateTime.UtcNow;
+            DateTime? scheduledAt = null;
+            DateTime? lastLogTime = null;
             string lastPhase = null;
-            var timeout = DateTime.UtcNow.AddMinutes(10);
-            while (DateTime.UtcNow < timeout)
+            string lastUnscheduledReason = null;
+
+            while (true)
             {
-                await Task.Delay(2000);
+                await Task.Delay(2000, context.CancellationToken);
                 var polledPod = await ExecuteK8sRequestAsync(context, async () =>
                 {
-                    return await client.CoreV1.ReadNamespacedPodStatusAsync(podName, namespaceVal);
+                    return await client.CoreV1.ReadNamespacedPodStatusAsync(podName, namespaceVal, cancellationToken: context.CancellationToken);
                 });
                 var phase = polledPod.Status?.Phase;
                 var ip = polledPod.Status?.PodIP;
+                var now = DateTime.UtcNow;
 
                 context.Debug($"Workflow pod {podName} phase: {phase}, IP: {ip}");
-                if (phase != lastPhase)
-                {
-                    context.Output($"Pod status: {phase}");
-                    lastPhase = phase;
-                }
 
                 if (string.Equals(phase, "Running", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(ip))
                 {
                     return ip;
                 }
-                else if (string.Equals(phase, "Failed", StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(phase, "Unknown", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(phase, "Failed", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(phase, "Unknown", StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new InvalidOperationException($"Workflow pod entered failed phase: {phase}");
+                    throw new InvalidOperationException($"Workflow pod {podName} entered failed phase: {phase}");
+                }
+
+                // Stage 1: Pod is not scheduled onto a node yet (waiting for cluster capacity / scale-up)
+                var scheduledCond = polledPod.Status?.Conditions?.FirstOrDefault(c => c.Type == "PodScheduled");
+                bool isScheduled = scheduledAt.HasValue || string.Equals(scheduledCond?.Status, "True", StringComparison.OrdinalIgnoreCase);
+                if (!isScheduled)
+                {
+                    if (!lastLogTime.HasValue || (now - lastLogTime.Value).TotalSeconds >= 60)
+                    {
+                        var reason = scheduledCond?.Message ?? scheduledCond?.Reason ?? phase ?? "Pending";
+                        var category = "[Pending Scheduling]";
+                        try
+                        {
+                            var events = await client.CoreV1.ListNamespacedEventAsync(
+                                namespaceVal,
+                                fieldSelector: $"involvedObject.name={podName}",
+                                cancellationToken: context.CancellationToken);
+                            var scaleEvent = events?.Items?
+                                .Where(e => e.Reason == "FailedScaleUp" || e.Reason == "TriggeredScaleUp" || e.Reason == "NotTriggerScaleUp")
+                                .OrderBy(e => e.LastTimestamp ?? e.EventTime ?? e.Metadata?.CreationTimestamp ?? DateTime.MinValue)
+                                .LastOrDefault();
+                            var msg = scaleEvent?.Message;
+                            if (!string.IsNullOrWhiteSpace(msg))
+                            {
+                                if (scaleEvent.Reason == "FailedScaleUp" || msg.Contains("backoff", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    category = "[GCE Stockout]";
+                                }
+                                else if (scaleEvent.Reason == "TriggeredScaleUp")
+                                {
+                                    category = "[Scaling Up Node]";
+                                }
+                                else if (msg.Contains("max node group size reached", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    category = "[Max Capacity Reached]";
+                                }
+                                else
+                                {
+                                    category = "[Unschedulable - Config Mismatch]";
+                                }
+                                reason = $"{reason} ({scaleEvent.Reason}: {msg})";
+                            }
+                        }
+                        catch
+                        {
+                            // Best-effort event lookup; fall back to PodScheduled condition message
+                        }
+
+                        lastUnscheduledReason = $"{category} {reason}";
+                        var elapsed = (int)(now - startTime).TotalSeconds;
+                        var remainingMin = Math.Max(1, (int)Math.Ceiling((schedulingTimeout - (now - startTime)).TotalMinutes));
+                        context.Output($"{category} Waiting for workflow pod {podName} to be scheduled ({elapsed}s elapsed, retrying every 2s, next update in 60s, timeout in {remainingMin}m): {reason}");
+                        lastLogTime = now;
+                    }
+                    if (now - startTime >= schedulingTimeout)
+                    {
+                        throw new TimeoutException($"Timed out after {(int)schedulingTimeout.TotalMinutes}m waiting for workflow pod {podName} to be scheduled: {lastUnscheduledReason ?? scheduledCond?.Message ?? "Pending"}");
+                    }
+                    continue;
+                }
+
+                // Stage 2: Pod is scheduled onto a node; waiting for image pull, init container, and Pod IP
+                scheduledAt ??= now;
+                if (phase != lastPhase)
+                {
+                    context.Output($"Pod {podName} scheduled (status: {phase})");
+                    lastPhase = phase;
+                }
+                if (now - scheduledAt.Value >= startupTimeout)
+                {
+                    throw new TimeoutException($"Timed out after {(int)startupTimeout.TotalMinutes}m waiting for scheduled workflow pod {podName} to start and resolve IP.");
                 }
             }
-
-            throw new TimeoutException($"Timed out waiting for GKE workflow pod {podName} to come online and resolve IP.");
         }
 
 
