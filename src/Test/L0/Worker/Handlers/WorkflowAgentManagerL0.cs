@@ -69,5 +69,18 @@ namespace GitHub.Runner.Common.Tests.Worker.Handlers
                 await manager.SyncFileCommandsFromWorkflowPodAsync(ec.Object, null, "dir", "suffix", null);
             }
         }
+
+        [Theory]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        [InlineData("/w/repo/repo/ci_connection/", "/w/repo/repo")]
+        [InlineData("/w/repo/repo/ci_connection", "/w/repo/repo")]
+        [InlineData("/w/repo/repo/ci_connection//", "/w/repo/repo")]
+        [InlineData("/w/repo/repo/./ci_connection/", "/w/repo/repo")]
+        [InlineData("/w/repo/repo/a/b/", "/w/repo/repo/a")]
+        public void GetHostExtractionDirectory_HandlesTrailingSlashes(string input, string expected)
+        {
+            Assert.Equal(expected, WorkflowAgentManager.GetHostExtractionDirectory(input));
+        }
     }
 }
