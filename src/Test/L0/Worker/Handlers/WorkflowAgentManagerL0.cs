@@ -80,7 +80,7 @@ namespace GitHub.Runner.Common.Tests.Worker.Handlers
         [InlineData("/w/repo/repo/a/b/", "/w/repo/repo/a")]
         public void GetHostExtractionDirectory_HandlesTrailingSlashes(string input, string expected)
         {
-            Assert.Equal(expected, WorkflowAgentManager.GetHostExtractionDirectory(input));
+            Assert.Equal(Path.GetFullPath(expected), WorkflowAgentManager.GetHostExtractionDirectory(input));
         }
     }
 }
