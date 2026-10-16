@@ -422,6 +422,9 @@ namespace GitHub.Runner.Worker.Handlers
             context.Debug($"Finished syncing directory '{hostDirectory}'.");
         }
 
+        internal static string GetHostExtractionDirectory(string hostDirectory) =>
+            Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(hostDirectory)));
+
         public async Task SyncDirectoryFromWorkflowPodAsync(IExecutionContext context, string hostDirectory)
         {
             if (!FeatureManager.IsNoSharedVolumeEnabled()) return;
@@ -430,7 +433,7 @@ namespace GitHub.Runner.Worker.Handlers
             var podIP = container?.ContainerIP;
             if (string.IsNullOrEmpty(podIP) || string.IsNullOrEmpty(hostDirectory)) return;
 
-            var normalizedDirectory = Path.GetFullPath(hostDirectory);
+            var normalizedDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(hostDirectory));
             var resolvedDirectory = container.TranslateToContainerPath(hostDirectory);
             if (string.IsNullOrEmpty(resolvedDirectory)) return;
 
@@ -478,7 +481,7 @@ namespace GitHub.Runner.Worker.Handlers
                     await ReadFileAsync(podIP, remoteTarPath, localFileStream);
                 }
 
-                var hostParentDir = Path.GetDirectoryName(normalizedDirectory);
+                var hostParentDir = GetHostExtractionDirectory(normalizedDirectory);
                 if (!Directory.Exists(hostParentDir))
                 {
                     Directory.CreateDirectory(hostParentDir);
