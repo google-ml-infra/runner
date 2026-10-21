@@ -369,6 +369,43 @@ namespace GitHub.Runner.Worker.Handlers
             }
         }
 
+        // ActionManager extracts downloaded GitHub action repositories under:
+        //   _actions/<owner>/<repo>/<ref>  (3 path segments beneath _actions)
+        // When a workflow references a sub-path action (e.g., "uses: owner/repo/subpath@ref"),
+        // ActionManager.LoadAction appends the sub-path to definition.Directory:
+        //   _actions/<owner>/<repo>/<ref>/<subpath...>
+        // Because a sub-path action's manifest can reference files in parent or sibling
+        // directories of the repository (e.g., "main: ../dist/index.cjs"), we resolve any
+        // path deeper than <owner>/<repo>/<ref> back to the 3-segment repository root so the
+        // entire action repository is synced to the workflow pod.
+        private const int ActionRepoRootSegmentCount = 3;
+
+        internal static string GetDirectoryToSync(string actionsDir, string hostDirectory)
+        {
+            var normalizedDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(hostDirectory));
+            if (string.IsNullOrEmpty(actionsDir))
+            {
+                return normalizedDirectory;
+            }
+
+            var normalizedActionsDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(actionsDir));
+            var prefix = normalizedActionsDir + Path.DirectorySeparatorChar;
+            if (!normalizedDirectory.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return normalizedDirectory;
+            }
+
+            var relativePath = normalizedDirectory.Substring(prefix.Length);
+            var segments = relativePath.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length >= ActionRepoRootSegmentCount)
+            {
+                // segments[0] = <owner>, segments[1] = <repo>, segments[2] = <ref>
+                return Path.Combine(normalizedActionsDir, segments[0], segments[1], segments[2]);
+            }
+
+            return normalizedDirectory;
+        }
+
         public async Task SyncDirectoryToWorkflowPodAsync(IExecutionContext context, string hostDirectory)
         {
             if (!FeatureManager.IsNoSharedVolumeEnabled()) return;
@@ -376,29 +413,30 @@ namespace GitHub.Runner.Worker.Handlers
             var podIP = context.Global.Container?.ContainerIP;
             if (string.IsNullOrEmpty(podIP) || string.IsNullOrEmpty(hostDirectory) || !Directory.Exists(hostDirectory)) return;
 
-            var normalizedDirectory = Path.GetFullPath(hostDirectory);
-            var actionsDir = Path.GetFullPath(HostContext.GetDirectory(WellKnownDirectory.Actions));
+            var actionsDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(HostContext.GetDirectory(WellKnownDirectory.Actions)));
+            var directoryToSync = GetDirectoryToSync(actionsDir, hostDirectory);
+            if (!Directory.Exists(directoryToSync)) return;
 
             // Third-party downloaded actions under '_actions/' are immutable for a given job execution.
             // We cache and sync them only once per workflow pod to avoid redundant network transfers across steps.
-            if (normalizedDirectory.StartsWith(actionsDir, StringComparison.OrdinalIgnoreCase))
+            if (directoryToSync.StartsWith(actionsDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             {
-                if (!_syncedDirectories.TryAdd(normalizedDirectory, 0))
+                if (!_syncedDirectories.TryAdd(directoryToSync, 0))
                 {
-                    context.Debug($"Directory '{normalizedDirectory}' has already been synced to workflow pod.");
+                    context.Debug($"Directory '{directoryToSync}' has already been synced to workflow pod.");
                     return;
                 }
             }
 
-            context.Debug($"Syncing directory tarball to workflow pod: {hostDirectory}");
+            context.Debug($"Syncing directory tarball to workflow pod: {directoryToSync}");
             var tempDirectory = HostContext.GetDirectory(WellKnownDirectory.Temp);
             var tempTarPath = Path.Combine(tempDirectory, $"{Guid.NewGuid():N}.tar");
 
             try
             {
-                await System.Formats.Tar.TarFile.CreateFromDirectoryAsync(hostDirectory, tempTarPath, false);
+                await System.Formats.Tar.TarFile.CreateFromDirectoryAsync(directoryToSync, tempTarPath, false);
 
-                var resolvedDirectory = context.Global.Container?.TranslateToContainerPath(hostDirectory) ?? hostDirectory;
+                var resolvedDirectory = context.Global.Container?.TranslateToContainerPath(directoryToSync) ?? directoryToSync;
                 using (var stream = File.OpenRead(tempTarPath))
                 {
                     await WriteFileAsync(podIP, resolvedDirectory, stream, extractTar: true);
@@ -419,7 +457,7 @@ namespace GitHub.Runner.Worker.Handlers
                 }
             }
 
-            context.Debug($"Finished syncing directory '{hostDirectory}'.");
+            context.Debug($"Finished syncing directory '{directoryToSync}'.");
         }
 
         internal static string GetHostExtractionDirectory(string hostDirectory) =>
