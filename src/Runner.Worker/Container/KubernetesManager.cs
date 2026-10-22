@@ -307,7 +307,7 @@ namespace GitHub.Runner.Worker.Container
             };
         }
 
-        private V1Container CreateJobContainer(
+        internal static V1Container CreateJobContainer(
             ContainerInfo jobContainer,
             bool isMtlsEnabled,
             V1ResourceRequirements resources,
@@ -348,12 +348,49 @@ namespace GitHub.Runner.Worker.Container
                 }
             }
 
+            // Forward the workflow's `container.env` (plus any proxy vars the runner added) the same way
+            // V1 runner-container-hooks does in prepare-job.ts. Empty values are skipped so `KEY: ''` stays
+            // unset rather than set-but-empty. HOME is skipped because MountWellKnownDirectories sets it to
+            // /github/home for docker mode, and V1 keeps the image's HOME instead.
             var envList = new List<V1EnvVar>();
+            var containerEnv = jobContainer.ContainerEnvironmentVariables;
+            foreach (var env in containerEnv)
+            {
+                if (string.IsNullOrEmpty(env.Key) || string.IsNullOrEmpty(env.Value) || env.Key == "HOME")
+                {
+                    continue;
+                }
+
+                envList.Add(new V1EnvVar { Name = env.Key, Value = env.Value });
+            }
+
+            // Like V1 and docker mode, CI defaults to true unless the workflow sets it (even to ''), and
+            // GITHUB_ACTIONS is always true.
+            if (!containerEnv.ContainsKey("CI"))
+            {
+                envList.Add(new V1EnvVar { Name = "CI", Value = "true" });
+            }
+
+            envList.RemoveAll(x => x.Name == "GITHUB_ACTIONS");
+            envList.Add(new V1EnvVar { Name = "GITHUB_ACTIONS", Value = "true" });
+
+            // The extension.yaml $job env is platform-controlled, so it wins on name clashes. V1 gets the
+            // same final values by appending it and letting Kubernetes keep the last duplicate; here clashing
+            // entries are replaced in place to avoid duplicates, so only $(VAR) references could resolve
+            // differently.
             if (templateEnv != null)
             {
                 foreach (var env in templateEnv)
                 {
-                    envList.Add(env);
+                    var existingIdx = envList.FindIndex(x => x.Name == env.Name);
+                    if (existingIdx >= 0)
+                    {
+                        envList[existingIdx] = env;
+                    }
+                    else
+                    {
+                        envList.Add(env);
+                    }
                 }
             }
 

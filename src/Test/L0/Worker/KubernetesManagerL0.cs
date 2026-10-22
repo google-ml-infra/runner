@@ -13,6 +13,7 @@
 // limitations under the License.
 
 using System.Collections.Generic;
+using System.Linq;
 using GitHub.Runner.Worker.Container;
 using k8s.Models;
 using Xunit;
@@ -55,6 +56,64 @@ namespace GitHub.Runner.Common.Tests.Worker
 
             Assert.True(pod.Metadata.Labels == null || !pod.Metadata.Labels.ContainsKey(KubernetesManager.RunnerPodLabelKey));
             Assert.Null(pod.Metadata.OwnerReferences);
+        }
+
+        public static IEnumerable<object[]> JobContainerEnvCases => new List<object[]>
+        {
+            // Forwards container.env, skips HOME and empty/null values, defaults CI and GITHUB_ACTIONS.
+            new object[]
+            {
+                new Dictionary<string, string> { ["MAXTEXT_PACKAGE_EXTRA"] = "tpu", ["HOME"] = "/github/home", ["TPU_SKIP_MDS_QUERY"] = "", ["NULL_VALUE"] = null },
+                null,
+                new Dictionary<string, string> { ["MAXTEXT_PACKAGE_EXTRA"] = "tpu", ["CI"] = "true", ["GITHUB_ACTIONS"] = "true" },
+            },
+            // An explicit CI is kept, and template env wins on name clashes without duplicate entries.
+            new object[]
+            {
+                new Dictionary<string, string> { ["CI"] = "false", ["SHARED"] = "workflow", ["WORKFLOW_ONLY"] = "1" },
+                new List<V1EnvVar> { new V1EnvVar { Name = "SHARED", Value = "template" }, new V1EnvVar { Name = "XDG_CACHE_HOME", Value = "/__w/.cache/bazel" } },
+                new Dictionary<string, string> { ["CI"] = "false", ["SHARED"] = "template", ["WORKFLOW_ONLY"] = "1", ["GITHUB_ACTIONS"] = "true", ["XDG_CACHE_HOME"] = "/__w/.cache/bazel" },
+            },
+            // Empty container.env and template env still get the defaults.
+            new object[]
+            {
+                new Dictionary<string, string>(),
+                new List<V1EnvVar>(),
+                new Dictionary<string, string> { ["CI"] = "true", ["GITHUB_ACTIONS"] = "true" },
+            },
+            // CI set to '' suppresses the default (and stays unset), like V1.
+            new object[]
+            {
+                new Dictionary<string, string> { ["CI"] = "" },
+                null,
+                new Dictionary<string, string> { ["GITHUB_ACTIONS"] = "true" },
+            },
+            // GITHUB_ACTIONS is always forced to true, only an exact HOME is dropped, and the template
+            // can still override a default without leaving a duplicate.
+            new object[]
+            {
+                new Dictionary<string, string> { ["GITHUB_ACTIONS"] = "false", ["Home"] = "/x" },
+                new List<V1EnvVar> { new V1EnvVar { Name = "CI", Value = "false" } },
+                new Dictionary<string, string> { ["Home"] = "/x", ["CI"] = "false", ["GITHUB_ACTIONS"] = "true" },
+            },
+        };
+
+        [Theory]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        [MemberData(nameof(JobContainerEnvCases))]
+        public void CreateJobContainer_BuildsEnvFromContainerEnvAndTemplate(Dictionary<string, string> containerEnv, List<V1EnvVar> templateEnv, Dictionary<string, string> expected)
+        {
+            var jobContainer = new ContainerInfo { ContainerImage = "image" };
+            foreach (var env in containerEnv)
+            {
+                jobContainer.ContainerEnvironmentVariables[env.Key] = env.Value;
+            }
+
+            var container = KubernetesManager.CreateJobContainer(jobContainer, isMtlsEnabled: false, resources: null, templateVolumeMounts: null, templateEnv: templateEnv);
+
+            // ToDictionary throws on duplicate names, so this also checks there are none.
+            Assert.Equal(expected, container.Env.ToDictionary(e => e.Name, e => e.Value));
         }
     }
 }
