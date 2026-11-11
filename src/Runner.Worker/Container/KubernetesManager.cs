@@ -86,9 +86,22 @@ namespace GitHub.Runner.Worker.Container
             // platform cleanup still finds it) instead of failing the job. The scheduling timeout spans attempts.
             var maxAttempts = ParseMaxWorkflowPodAttempts(Environment.GetEnvironmentVariable("ACTIONS_RUNNER_WORKFLOW_POD_MAX_ATTEMPTS"));
             var startTime = DateTime.UtcNow;
-            string podIP;
-            for (int attempt = 1; ; attempt++)
+            string podIP = null;
+            for (int attempt = 0; attempt < maxAttempts; attempt++)
             {
+                if (attempt > 0)
+                {
+                    try
+                    {
+                        await PrepareToRecreateWorkflowPodAsync(context, client, podName, namespaceVal, runnerPodName, startTime);
+                    }
+                    catch
+                    {
+                        await DeleteWorkflowPodQuietlyAsync(context, client, podName, namespaceVal);
+                        throw;
+                    }
+                }
+
                 context.Debug($"Creating workflow pod {podName} using Kubernetes C# client...");
                 await ExecuteK8sRequestAsync(context, async () =>
                 {
@@ -98,34 +111,31 @@ namespace GitHub.Runner.Worker.Container
                 context.Output($"Workflow pod '{podName}' created successfully. Waiting for readiness and Pod IP...");
 
                 // Wait for readiness and resolve IP; clean up pod if wait fails or is canceled
-                string lostReason;
                 try
                 {
                     podIP = await WaitForPodIPAsync(client, podName, namespaceVal, context, startTime);
                     break;
                 }
-                catch (WorkflowPodLostException ex) when (attempt < maxAttempts && !context.CancellationToken.IsCancellationRequested)
+                catch (WorkflowPodLostException ex) when (attempt + 1 < maxAttempts && !context.CancellationToken.IsCancellationRequested)
                 {
-                    lostReason = ex.Message;
+                    context.Warning($"{ex.Message} Recreating it (attempt {attempt + 2}/{maxAttempts})...");
+                }
+                catch (WorkflowPodLostException ex)
+                {
+                    await DeleteWorkflowPodQuietlyAsync(context, client, podName, namespaceVal);
+                    throw new WorkflowPodLostException($"{ex.Message} Gave up after {attempt + 1} attempt(s).");
                 }
                 catch
                 {
                     await DeleteWorkflowPodQuietlyAsync(context, client, podName, namespaceVal);
                     throw;
                 }
+            }
 
-                context.Warning($"{lostReason} Recreating it (attempt {attempt + 1}/{maxAttempts})...");
-                try
-                {
-                    await WaitForPodGoneAsync(context, client, podName, namespaceVal);
-                    // Give Kubernetes GC a moment to remove the old pod's ephemeral PVCs, which share its name.
-                    await Task.Delay(WorkflowPodRecreateDelay, context.CancellationToken);
-                }
-                catch
-                {
-                    await DeleteWorkflowPodQuietlyAsync(context, client, podName, namespaceVal);
-                    throw;
-                }
+            if (podIP == null)
+            {
+                // Not reachable: every attempt either breaks with an IP or throws.
+                throw new InvalidOperationException($"Workflow pod {podName} did not start.");
             }
 
             jobContainer.ContainerIP = podIP;
@@ -449,8 +459,8 @@ namespace GitHub.Runner.Worker.Container
 
             while (true)
             {
-                var pollDelayMs = (!scheduledAt.HasValue && (DateTime.UtcNow - attemptStartTime).TotalSeconds >= 30) ? 10000 : 2000;
-                await Task.Delay(pollDelayMs, context.CancellationToken);
+                var pollDelay = (!scheduledAt.HasValue && (DateTime.UtcNow - attemptStartTime).TotalSeconds >= 30) ? UnscheduledPollInterval : PollInterval;
+                await Task.Delay(pollDelay, context.CancellationToken);
                 var polledPod = await ReadPodStatusOrNullAsync(context, client, podName, namespaceVal);
                 if (polledPod == null)
                 {
@@ -633,13 +643,29 @@ namespace GitHub.Runner.Worker.Container
         }
 
         internal const int DefaultMaxWorkflowPodAttempts = 3;
+        internal const int MaxWorkflowPodAttemptsCap = 10;
         private static readonly TimeSpan WorkflowPodGoneTimeout = TimeSpan.FromMinutes(2);
-        private static readonly TimeSpan WorkflowPodRecreateDelay = TimeSpan.FromSeconds(5);
 
-        // Pod failure reasons that mean the node went away or kicked the pod out, not that the job failed.
+        // Delays are fields so tests can set them to zero.
+        internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
+        internal TimeSpan UnscheduledPollInterval { get; set; } = TimeSpan.FromSeconds(10);
+        internal TimeSpan RecreateDelay { get; set; } = TimeSpan.FromSeconds(5);
+
+        // Lets tests inject a mock client instead of the in-cluster config.
+        internal void SetK8sClient(IKubernetes client, string namespaceVal)
+        {
+            lock (_lock)
+            {
+                _k8sClient = client;
+                _namespace = namespaceVal;
+            }
+        }
+
+        // Pod failure reasons that only the node/kubelet sets: the node went away, kicked the pod out, or rejected
+        // it at admission (e.g. a new GPU/TPU node whose device plugin isn't ready). None of them mean the job failed.
         private static readonly HashSet<string> LostPodFailureReasons = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "Evicted", "NodeShutdown", "Terminated"
+            "Evicted", "NodeShutdown", "Terminated", "UnexpectedAdmissionError", "NodeAffinity"
         };
 
         // Thrown when the workflow pod is removed by someone else before it starts; PrepareJobAsync recreates it.
@@ -650,27 +676,35 @@ namespace GitHub.Runner.Worker.Container
 
         internal static int ParseMaxWorkflowPodAttempts(string value)
         {
-            return int.TryParse(value, out var attempts) && attempts > 0 ? attempts : DefaultMaxWorkflowPodAttempts;
+            if (!int.TryParse(value, out var attempts) || attempts <= 0)
+            {
+                return DefaultMaxWorkflowPodAttempts;
+            }
+            return Math.Min(attempts, MaxWorkflowPodAttemptsCap);
         }
 
-        // A pod that hasn't started is "lost" if something else is deleting it or the node evicted it. Once it's
-        // Running, job steps may have run, so recreating it isn't safe and it's never reported as lost.
+        // Only called while waiting for the pod to start, so no job step has run yet and recreating it is safe.
+        // The pod is "lost" if something else is deleting it, its node is unreachable (Unknown), or the node
+        // failed it with one of LostPodFailureReasons (exact match, or the kubelet's OutOf<resource> prefix).
         internal static bool IsWorkflowPodLost(V1Pod pod, out string reason)
         {
             reason = null;
             var phase = pod?.Status?.Phase;
-            if (string.Equals(phase, "Running", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
             if (pod?.Metadata?.DeletionTimestamp != null)
             {
                 reason = "pod is being deleted";
                 return true;
             }
-            if (string.Equals(phase, "Failed", StringComparison.OrdinalIgnoreCase) && pod.Status.Reason != null && LostPodFailureReasons.Contains(pod.Status.Reason))
+            if (string.Equals(phase, "Unknown", StringComparison.OrdinalIgnoreCase))
             {
-                reason = $"pod failed with reason {pod.Status.Reason}";
+                reason = "node is unreachable";
+                return true;
+            }
+            var failureReason = pod?.Status?.Reason;
+            if (string.Equals(phase, "Failed", StringComparison.OrdinalIgnoreCase) && failureReason != null &&
+                (LostPodFailureReasons.Contains(failureReason) || failureReason.StartsWith("OutOf", StringComparison.Ordinal)))
+            {
+                reason = $"pod failed with reason {failureReason}";
                 return true;
             }
             return false;
@@ -682,14 +716,11 @@ namespace GitHub.Runner.Worker.Container
         }
 
         // Returns null if the pod doesn't exist (404), without logging an error.
-        private async Task<V1Pod> ReadPodStatusOrNullAsync(IExecutionContext context, IKubernetes client, string podName, string namespaceVal)
+        private async Task<V1Pod> ReadPodOrNullAsync(IExecutionContext context, Func<Task<V1Pod>> read)
         {
             try
             {
-                return await ExecuteK8sRequestAsync(context, async () =>
-                {
-                    return await client.CoreV1.ReadNamespacedPodStatusAsync(podName, namespaceVal, cancellationToken: context.CancellationToken);
-                }, logNotFound: false);
+                return await ExecuteK8sRequestAsync(context, read, logNotFound: false);
             }
             catch (Exception ex) when (IsNotFound(ex))
             {
@@ -697,13 +728,48 @@ namespace GitHub.Runner.Worker.Container
             }
         }
 
-        // Deletes a lost pod (if it still exists) and waits until its name is free so it can be recreated. It's
-        // force-deleted: it never started, and a graceful delete on a dead node only finishes once PodGC runs.
+        private Task<V1Pod> ReadPodStatusOrNullAsync(IExecutionContext context, IKubernetes client, string podName, string namespaceVal)
+        {
+            return ReadPodOrNullAsync(context, () => client.CoreV1.ReadNamespacedPodStatusAsync(podName, namespaceVal, cancellationToken: context.CancellationToken));
+        }
+
+        // Runs before each recreate. Gives up if the scheduling budget is spent or the runner pod itself is being
+        // torn down (the platform deletes the runner pod, then the workflow pod; recreating after that would leak).
+        // Then force-deletes the lost pod and waits for its name to be free.
+        private async Task PrepareToRecreateWorkflowPodAsync(IExecutionContext context, IKubernetes client, string podName, string namespaceVal, string runnerPodName, DateTime startTime)
+        {
+            var schedulingTimeout = GetTimeoutMinutes("ACTIONS_RUNNER_WORKFLOW_POD_SCHEDULING_TIMEOUT_MINUTES", 60);
+            if (DateTime.UtcNow - startTime >= schedulingTimeout)
+            {
+                throw new TimeoutException($"Timed out after {(int)schedulingTimeout.TotalMinutes}m; not recreating workflow pod {podName}.");
+            }
+
+            if (!string.IsNullOrEmpty(runnerPodName))
+            {
+                var runnerPod = await ReadPodOrNullAsync(context, () => client.CoreV1.ReadNamespacedPodAsync(runnerPodName, namespaceVal, cancellationToken: context.CancellationToken));
+                if (runnerPod == null || runnerPod.Metadata?.DeletionTimestamp != null)
+                {
+                    throw new InvalidOperationException($"Runner pod {runnerPodName} is being deleted; not recreating workflow pod {podName}.");
+                }
+            }
+
+            await WaitForPodGoneAsync(context, client, podName, namespaceVal);
+
+            // Not needed for correctness: if the old pod's ephemeral PVC (same name) still exists, the new pod just
+            // waits in Pending until Kubernetes GC removes it. The pause only avoids that noise in the job log.
+            await Task.Delay(RecreateDelay, context.CancellationToken);
+        }
+
+        // Force-deletes a lost pod (if it still exists) and waits until its name is free. Force is fine because
+        // it never started, and a graceful delete on a dead node only finishes once PodGC runs.
         private async Task WaitForPodGoneAsync(IExecutionContext context, IKubernetes client, string podName, string namespaceVal)
         {
             try
             {
-                await client.CoreV1.DeleteNamespacedPodAsync(podName, namespaceVal, gracePeriodSeconds: 0, cancellationToken: context.CancellationToken);
+                await ExecuteK8sRequestAsync(context, async () =>
+                {
+                    return await client.CoreV1.DeleteNamespacedPodAsync(podName, namespaceVal, gracePeriodSeconds: 0, cancellationToken: context.CancellationToken);
+                }, logNotFound: false);
             }
             catch (Exception ex) when (IsNotFound(ex))
             {
@@ -717,7 +783,7 @@ namespace GitHub.Runner.Worker.Container
                 {
                     throw new TimeoutException($"Timed out after {(int)WorkflowPodGoneTimeout.TotalMinutes}m waiting for removed workflow pod {podName} to be deleted before recreating it.");
                 }
-                await Task.Delay(2000, context.CancellationToken);
+                await Task.Delay(PollInterval, context.CancellationToken);
             }
         }
 
@@ -757,8 +823,12 @@ namespace GitHub.Runner.Worker.Container
                 await ExecuteK8sRequestAsync(context, async () =>
                 {
                     return await client.CoreV1.DeleteNamespacedPodAsync(podName, namespaceVal);
-                });
+                }, logNotFound: false);
                 context.Debug($"Successfully deleted Kubernetes workflow pod: {podName}");
+            }
+            catch (Exception ex) when (IsNotFound(ex))
+            {
+                context.Debug($"Kubernetes workflow pod {podName} was already deleted.");
             }
             catch (Exception ex)
             {

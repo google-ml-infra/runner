@@ -15,8 +15,16 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using GitHub.Runner.Worker;
 using GitHub.Runner.Worker.Container;
+using k8s;
+using k8s.Autorest;
 using k8s.Models;
+using Moq;
 using Xunit;
 
 namespace GitHub.Runner.Common.Tests.Worker
@@ -122,12 +130,17 @@ namespace GitHub.Runner.Common.Tests.Worker
         [Trait("Category", "Worker")]
         [InlineData("Pending", null, false, false)]
         [InlineData("Pending", null, true, true)]
+        [InlineData("Running", null, true, true)]
+        [InlineData("Unknown", null, false, true)]
         [InlineData("Failed", "Evicted", false, true)]
+        [InlineData("Failed", "evicted", false, true)]
         [InlineData("Failed", "NodeShutdown", false, true)]
         [InlineData("Failed", "Terminated", false, true)]
+        [InlineData("Failed", "UnexpectedAdmissionError", false, true)]
+        [InlineData("Failed", "OutOfnvidia.com/gpu", false, true)]
         [InlineData("Failed", "Error", false, false)]
-        [InlineData("Running", null, true, false)]
-        public void IsWorkflowPodLost_OnlyForPodsRemovedBeforeStart(string phase, string reason, bool deleting, bool expected)
+        [InlineData("Failed", null, false, false)]
+        public void IsWorkflowPodLost_OnlyForNodeLevelFailures(string phase, string reason, bool deleting, bool expected)
         {
             var pod = new V1Pod
             {
@@ -143,15 +156,92 @@ namespace GitHub.Runner.Common.Tests.Worker
         [Trait("Level", "L0")]
         [Trait("Category", "Worker")]
         [InlineData(null, 3)]
-        [InlineData("", 3)]
         [InlineData("0", 3)]
         [InlineData("-1", 3)]
         [InlineData("abc", 3)]
         [InlineData("1", 1)]
         [InlineData("5", 5)]
-        public void ParseMaxWorkflowPodAttempts_DefaultsToThree(string value, int expected)
+        [InlineData("50", 10)]
+        public void ParseMaxWorkflowPodAttempts_DefaultsToThreeAndCapsAtTen(string value, int expected)
         {
             Assert.Equal(expected, KubernetesManager.ParseMaxWorkflowPodAttempts(value));
+        }
+
+        // Each status read is "404", "deleting" (Running + deletionTimestamp) or "running".
+        [Theory]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        [InlineData("404,running", false, 2, null)]
+        [InlineData("deleting,running", false, 2, null)]
+        [InlineData("404,404,404", false, 3, "Gave up after 3 attempt(s)")]
+        [InlineData("404", true, 1, "Runner pod pool-abc123 is being deleted")]
+        public async Task PrepareJobAsync_RecreatesLostWorkflowPod(string reads, bool runnerPodGoneOnRetry, int expectedCreates, string expectedError)
+        {
+            var coreV1 = new Mock<ICoreV1Operations>();
+            var client = new Mock<IKubernetes>();
+            client.Setup(c => c.CoreV1).Returns(coreV1.Object);
+            coreV1.Setup(c => c.CreateNamespacedPodWithHttpMessagesAsync(It.IsAny<V1Pod>(), "ns", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool?>(), It.IsAny<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new HttpOperationResponse<V1Pod> { Body = new V1Pod() });
+            coreV1.Setup(c => c.DeleteNamespacedPodWithHttpMessagesAsync(It.IsAny<string>(), "ns", It.IsAny<V1DeleteOptions>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<bool?>(), It.IsAny<bool?>(), It.IsAny<string>(), It.IsAny<bool?>(), It.IsAny<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(NotFound());
+            var runnerPodReads = 0;
+            coreV1.Setup(c => c.ReadNamespacedPodWithHttpMessagesAsync("pool-abc123", "ns", It.IsAny<bool?>(), It.IsAny<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), It.IsAny<CancellationToken>()))
+                .Returns(() => runnerPodGoneOnRetry && runnerPodReads++ > 0
+                    ? throw NotFound()
+                    : Task.FromResult(new HttpOperationResponse<V1Pod> { Body = new V1Pod { Metadata = new V1ObjectMeta { Name = "pool-abc123", Uid = "uid-1" } } }));
+            var statusReads = new Queue<string>(reads.Split(','));
+            coreV1.Setup(c => c.ReadNamespacedPodStatusWithHttpMessagesAsync(It.IsAny<string>(), "ns", It.IsAny<bool?>(), It.IsAny<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), It.IsAny<CancellationToken>()))
+                .Returns(() => statusReads.Dequeue() switch
+                {
+                    "404" => throw NotFound(),
+                    var read => Task.FromResult(new HttpOperationResponse<V1Pod>
+                    {
+                        Body = new V1Pod
+                        {
+                            Metadata = new V1ObjectMeta { DeletionTimestamp = read == "deleting" ? DateTime.UtcNow : null },
+                            Status = new V1PodStatus { Phase = "Running", PodIP = "10.0.0.1" }
+                        }
+                    }),
+                });
+
+            var ec = new Mock<IExecutionContext>();
+            ec.Setup(x => x.Global).Returns(new GlobalContext());
+            ec.Setup(x => x.JobContext).Returns(new JobContext());
+            ec.Setup(x => x.CancellationToken).Returns(CancellationToken.None);
+            using var hc = new TestHostContext(this);
+            var manager = new KubernetesManager { PollInterval = TimeSpan.Zero, RecreateDelay = TimeSpan.Zero };
+            manager.Initialize(hc);
+            manager.SetK8sClient(client.Object, "ns");
+            var jobContainer = new ContainerInfo { ContainerImage = "image", IsJobContainer = true };
+
+            Environment.SetEnvironmentVariable("ACTIONS_RUNNER_POD_NAME", "pool-abc123");
+            Environment.SetEnvironmentVariable("ACTIONS_RUNNER_CONTAINER_HOOK_TEMPLATE", "/nonexistent/extension.yaml");
+            try
+            {
+                var prepare = manager.PrepareJobAsync(ec.Object, new List<ContainerInfo> { jobContainer });
+                if (expectedError == null)
+                {
+                    await prepare;
+                    Assert.Equal("10.0.0.1", jobContainer.ContainerIP);
+                }
+                else
+                {
+                    var ex = await Assert.ThrowsAnyAsync<Exception>(() => prepare);
+                    Assert.Contains(expectedError, ex.Message);
+                }
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("ACTIONS_RUNNER_POD_NAME", null);
+                Environment.SetEnvironmentVariable("ACTIONS_RUNNER_CONTAINER_HOOK_TEMPLATE", null);
+            }
+
+            coreV1.Verify(c => c.CreateNamespacedPodWithHttpMessagesAsync(It.IsAny<V1Pod>(), "ns", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool?>(), It.IsAny<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), It.IsAny<CancellationToken>()), Times.Exactly(expectedCreates));
+        }
+
+        private static HttpOperationException NotFound()
+        {
+            return new HttpOperationException { Response = new HttpResponseMessageWrapper(new HttpResponseMessage(HttpStatusCode.NotFound), string.Empty) };
         }
     }
 }
