@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using GitHub.Runner.Worker.Container;
@@ -114,6 +115,43 @@ namespace GitHub.Runner.Common.Tests.Worker
 
             // ToDictionary throws on duplicate names, so this also checks there are none.
             Assert.Equal(expected, container.Env.ToDictionary(e => e.Name, e => e.Value));
+        }
+
+        [Theory]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        [InlineData("Pending", null, false, false)]
+        [InlineData("Pending", null, true, true)]
+        [InlineData("Failed", "Evicted", false, true)]
+        [InlineData("Failed", "NodeShutdown", false, true)]
+        [InlineData("Failed", "Terminated", false, true)]
+        [InlineData("Failed", "Error", false, false)]
+        [InlineData("Running", null, true, false)]
+        public void IsWorkflowPodLost_OnlyForPodsRemovedBeforeStart(string phase, string reason, bool deleting, bool expected)
+        {
+            var pod = new V1Pod
+            {
+                Metadata = new V1ObjectMeta { DeletionTimestamp = deleting ? DateTime.UtcNow : null },
+                Status = new V1PodStatus { Phase = phase, Reason = reason }
+            };
+
+            Assert.Equal(expected, KubernetesManager.IsWorkflowPodLost(pod, out var why));
+            Assert.Equal(expected, !string.IsNullOrEmpty(why));
+        }
+
+        [Theory]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        [InlineData(null, 3)]
+        [InlineData("", 3)]
+        [InlineData("0", 3)]
+        [InlineData("-1", 3)]
+        [InlineData("abc", 3)]
+        [InlineData("1", 1)]
+        [InlineData("5", 5)]
+        public void ParseMaxWorkflowPodAttempts_DefaultsToThree(string value, int expected)
+        {
+            Assert.Equal(expected, KubernetesManager.ParseMaxWorkflowPodAttempts(value));
         }
     }
 }
