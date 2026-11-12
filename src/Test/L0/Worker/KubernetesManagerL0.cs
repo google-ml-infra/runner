@@ -173,7 +173,7 @@ namespace GitHub.Runner.Common.Tests.Worker
         [Trait("Category", "Worker")]
         [InlineData("404,running", false, 2, null)]
         [InlineData("deleting,running", false, 2, null)]
-        [InlineData("404,404,404", false, 3, "Gave up after 3 attempt(s)")]
+        [InlineData("404,404,404", false, 3, "was deleted before it started")]
         [InlineData("404", true, 1, "Runner pod pool-abc123 is being deleted")]
         public async Task PrepareJobAsync_RecreatesLostWorkflowPod(string reads, bool runnerPodGoneOnRetry, int expectedCreates, string expectedError)
         {

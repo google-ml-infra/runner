@@ -91,57 +91,46 @@ namespace GitHub.Runner.Worker.Container
             {
                 if (attempt > 0)
                 {
-                    try
-                    {
-                        await PrepareToRecreateWorkflowPodAsync(context, client, podName, namespaceVal, runnerPodName, startTime);
-                    }
-                    catch
-                    {
-                        await DeleteWorkflowPodQuietlyAsync(context, client, podName, namespaceVal);
-                        throw;
-                    }
+                    await PrepareToRecreateWorkflowPodAsync(context, client, podName, namespaceVal, runnerPodName, startTime);
                 }
 
-                context.Debug($"Creating workflow pod {podName} using Kubernetes C# client...");
-                await ExecuteK8sRequestAsync(context, async () =>
-                {
-                    return await client.CoreV1.CreateNamespacedPodAsync(pod, namespaceVal, cancellationToken: context.CancellationToken);
-                });
-
-                context.Output($"Workflow pod '{podName}' created successfully. Waiting for readiness and Pod IP...");
-
-                // Wait for readiness and resolve IP; clean up pod if wait fails or is canceled
                 try
                 {
-                    podIP = await WaitForPodIPAsync(client, podName, namespaceVal, context, startTime);
+                    podIP = await CreateWorkflowPodAsync(context, client, pod, podName, namespaceVal, startTime);
                     break;
                 }
                 catch (WorkflowPodLostException ex) when (attempt + 1 < maxAttempts && !context.CancellationToken.IsCancellationRequested)
                 {
                     context.Warning($"{ex.Message} Recreating it (attempt {attempt + 2}/{maxAttempts})...");
                 }
-                catch (WorkflowPodLostException ex)
-                {
-                    await DeleteWorkflowPodQuietlyAsync(context, client, podName, namespaceVal);
-                    throw new WorkflowPodLostException($"{ex.Message} Gave up after {attempt + 1} attempt(s).");
-                }
-                catch
-                {
-                    await DeleteWorkflowPodQuietlyAsync(context, client, podName, namespaceVal);
-                    throw;
-                }
-            }
-
-            if (podIP == null)
-            {
-                // Not reachable: every attempt either breaks with an IP or throws.
-                throw new InvalidOperationException($"Workflow pod {podName} did not start.");
             }
 
             jobContainer.ContainerIP = podIP;
             jobContainer.IsAlpine = false;
             context.Output("Workflow pod is ready");
             context.Debug($"Workflow pod resolved ContainerIP: {podIP}");
+        }
+
+        // One attempt: create the pod and wait for its IP. Deletes the pod on any failure.
+        private async Task<string> CreateWorkflowPodAsync(IExecutionContext context, IKubernetes client, V1Pod pod, string podName, string namespaceVal, DateTime startTime)
+        {
+            context.Debug($"Creating workflow pod {podName} using Kubernetes C# client...");
+            await ExecuteK8sRequestAsync(context, async () =>
+            {
+                return await client.CoreV1.CreateNamespacedPodAsync(pod, namespaceVal, cancellationToken: context.CancellationToken);
+            });
+
+            context.Output($"Workflow pod '{podName}' created successfully. Waiting for readiness and Pod IP...");
+
+            try
+            {
+                return await WaitForPodIPAsync(client, podName, namespaceVal, context, startTime);
+            }
+            catch
+            {
+                await DeleteWorkflowPodQuietlyAsync(context, client, podName, namespaceVal);
+                throw;
+            }
         }
 
         private V1Pod BuildPodSpec(
